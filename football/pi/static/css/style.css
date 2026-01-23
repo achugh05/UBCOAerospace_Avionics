@@ -1,0 +1,45 @@
+ * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* custom font */
+        @font-face {
+            font-family: myFont; /* set name */
+            src: url("ShareTechMono-Regular.ttf"); /* url of the font */
+        }
+
+        body, html {
+            height: 100%; /* Ensures the app fills the whole screen */
+            font-family: myFont;
+            background-color: #0c0c0c;
+        }
+
+        /* flex container which holds all boxes */
+        .full-container {
+            display: flex;       
+            flex-wrap: wrap;     
+            height: 100%;     
+            padding: 7px;       /* Gap around the outside edge */
+        }
+
+        /* style for each box  */
+        .container {
+            background-color: #4e0b0b;
+            border: 2px solid #ac0c0c;
+            color: rgb(207, 203, 203);
+            border-radius: 5px;
+            margin: 6px;        /* Gap between boxes */
+            
+            flex-grow: 1;        /* Allow boxes to grow to fill space */
+            flex-basis: 48%;    
+            
+            /* Center content inside the box */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+       

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Football Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="{{ url_for('static', filename='js/socket.io.js') }}"></script>
+</head>
+
+<body>
+    <div class="full-container">
+        <div class="container" id="PiCam">
+            <h2>this is the PiCam</h2>
+        </div>
+        <div class="container" id="Telemetry">
+            <h2>this is all telemetry data</h2>
+        </div>
+        <div class="container" id="GSE">
+            <h2>this is the GSE Diagram</h2>
+            <h1><span id="valve">-----</span></h1>
+        </div>
+        <div class="container" id="Sensors">
+            <h2>this is the sensor data</h2>
+            <h1><span id="humidity">---</span> %</h1>
+            <h1><span id="temp">---</span> °C</h1>
+        </div>
+    </div> 
+
+    <script type="text/javascript">
+
+        //initialize socketio connection
+        const socket = io();
+
+        //serial_data emitted from python script...JS waits for serial_data and recieves the data
+        socket.on('serial_data', (data) => {
+
+            // take the data and update it using element ids in html
+            document.getElementById("humidity").innerText = data.humidity;
+            document.getElementById("temp").innerText = data.temp;
+
+            
+            // THIS WILL ONLY WORK IF EVERY KEY IN THE PACKET HAS A CORRESPONDING ID IN HTML
+            // THE NAMES MUST BE EXACTLY THE SAME
+            // // For every Key and Value in the packet
+            // for (const [key, value] of Object.entries(data)) {
+                
+            // // try to find an HTML element with that ID
+            // const element = document.getElementById(key);
+                
+            // // If it exists update it
+            // if (element) {
+            //     element.innerText = value;
+            //     }
+            // }
+        });
+        
+
+
+
+        // function getSensorData() { 
+        //     fetch('/api/data')
+        //     .then(response =>  response.json())
+        //     .then(data => { 
+        //         let valveStatus = "CLOSED";
+        //         if (data.valveState == true) {
+        //             valveStatus = 'OPEN';
+        //         }
+        //         document.getElementById("pressure").innerText = data.Pressure + " PSI";
+        //         document.getElementById("temperature").innerText = data.Temperature + " C";
+        //         document.getElementById("valve").innerText = valveStatus;
+        //     });
+        // }
+        // setInterval(getSensorData, 1000);
+    </script>
+</body>
+
+</html>
