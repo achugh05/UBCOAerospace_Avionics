@@ -9,23 +9,72 @@
 </head>
 
 <body>
-    <div class="full-container">
-        <div class="container" id="PiCam">
-            <h2>this is the PiCam</h2>
+    <div class="dashboard-grid">
+
+    <div class="panel" id="gse-panel">
+        <div class="panel-header">ACTIVE_GSE_DIAGRAM </div>
+        
+        <div class="gse-viewport">
+            <div class="gse-legend">
+                <div class="legend-title">STATUS KEY</div>
+                <div class="legend-item">
+                    <span class="dot open"></span> VALVE OPEN
+                </div>
+                <div class="legend-item">
+                    <span class="dot closed"></span> VALVE CLOSED
+                </div>
+                <div class="legend-item">
+                    <span class="dot error"></span> SENSOR ERROR
+                </div>
         </div>
-        <div class="container" id="Telemetry">
-            <h2>this is all telemetry data</h2>
+            <div class="placeholder-diagram">
+                [ GSE MAP LOADING... ]
+                <div id="valve_main" class="valve-indicator open">VALVE_01</div>
+            </div>
         </div>
-        <div class="container" id="GSE">
-            <h2>this is the GSE Diagram</h2>
-            <h1><span id="valve">-----</span></h1>
+    </div>
+
+    <div class="right-column">
+        
+        <div class="panel" id="cam-panel">
+            <div class="panel-header">LIVE_OPTICAL_FEED</div>
+            <div class="cam-grid">
+                <div class="cam-feed">CAM_01</div>
+                <div class="cam-feed">CAM_02</div>
+                <div class="cam-feed">CAM_03</div>
+                <div class="cam-feed">CAM_04</div>
+            </div>
         </div>
-        <div class="container" id="Sensors">
-            <h2>this is the sensor data</h2>
-            <h1><span id="humidity">---</span> %</h1>
-            <h1><span id="temp">---</span> °C</h1>
+
+        <div class="panel" id="data-panel">
+            <div class="panel-header">TELEMETRY_STREAM</div>
+            
+            <div class="data-table">
+                <div class="data-row">
+                    <span class="label">PRESSURE SOMEWHERE</span>
+                    <span class="value" id="tank_pressure">---</span> <span class="unit">UNIT</span>
+                </div>
+                <div class="data-row">
+                    <span class="label">SOMETHING ELSE</span>
+                    <span class="value" id="battery_voltage">---</span> <span class="unit">UNIT</span>
+                </div>
+                <div class="data-row">
+                    <span class="label">SERVO_SOMETHING</span>
+                    <span class="value" id="servo_x">---</span> <span class="unit">DEG</span>
+                </div>
+                 <div class="data-row">
+                    <span class="label">TEMPERATURE</span>
+                    <span class="value" id="temp">---</span> <span class="unit">C</span>
+                </div>
+                 <div class="data-row">
+                    <span class="label">HUMIDITY</span>
+                    <span class="value" id="humidity">---</span> <span class="unit">%</span>
+                </div>
+            </div>
         </div>
-    </div> 
+        
+    </div>
+</div>
 
     <script type="text/javascript">
 
@@ -36,42 +85,24 @@
         socket.on('serial_data', (data) => {
 
             // take the data and update it using element ids in html
-            document.getElementById("humidity").innerText = data.humidity;
-            document.getElementById("temp").innerText = data.temp;
+            // document.getElementById("humidity").innerText = data.humidity;
+            // document.getElementById("temp").innerText = data.temp;
 
-            
             // THIS WILL ONLY WORK IF EVERY KEY IN THE PACKET HAS A CORRESPONDING ID IN HTML
             // THE NAMES MUST BE EXACTLY THE SAME
             // // For every Key and Value in the packet
-            // for (const [key, value] of Object.entries(data)) {
+            for (const [key, value] of Object.entries(data)) {
                 
             // // try to find an HTML element with that ID
-            // const element = document.getElementById(key);
+            const element = document.getElementById(key);
                 
             // // If it exists update it
-            // if (element) {
-            //     element.innerText = value;
-            //     }
-            // }
+            if (element) {
+                element.innerText = value;
+                }
+            }
         });
-        
 
-
-
-        // function getSensorData() { 
-        //     fetch('/api/data')
-        //     .then(response =>  response.json())
-        //     .then(data => { 
-        //         let valveStatus = "CLOSED";
-        //         if (data.valveState == true) {
-        //             valveStatus = 'OPEN';
-        //         }
-        //         document.getElementById("pressure").innerText = data.Pressure + " PSI";
-        //         document.getElementById("temperature").innerText = data.Temperature + " C";
-        //         document.getElementById("valve").innerText = valveStatus;
-        //     });
-        // }
-        // setInterval(getSensorData, 1000);
     </script>
 </body>
 

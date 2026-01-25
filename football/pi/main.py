@@ -8,7 +8,7 @@ import serial
 
 
 serial_port = None
-port = 'COM4'
+port = 'COM3'
 
 # initialize flask app with html template which is by default in templates without specifying
 app = Flask(__name__)
