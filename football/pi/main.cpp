@@ -2,6 +2,7 @@
 #include <termios.h>
 
 #include <NetworkLink.h>
+#include <unistd.h>
 
 void callbackTest(std::string buf) {
     std::cout << "Test Json Received: "<< buf << std::endl;
@@ -14,11 +15,23 @@ int main () {
     //
     // while (true);
     
-    NetworkLink clientTest(Protocol::UDP,
+    NetworkLink clientTest(Protocol::TCP,
                             "127.0.0.1", 5001,
                             "127.0.0.1", 5000,
                             false);
 
-    clientTest.setCallback(callbackTest);
+    clientTest.setCallback(onJsonReceive, callbackTest);
+    clientTest.setCallback(onConnection,
+        [](std::string _) {
+        std::cout<<"Successfully Connected"<<std::endl;
+    });
+    clientTest.setCallback(onDisconnection,
+        [](std::string _) {
+        std::cout<<"Unexpected disconnection occured, trying again"<<std::endl;
+    });
+    sleep(10);
+    std::string s ="{test:test}";
+    clientTest.sendData(s.c_str(),s.size());
+    std::cout << "test Message Sent"<<std::endl;
     while (true);
 }

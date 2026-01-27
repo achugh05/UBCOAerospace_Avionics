@@ -13,28 +13,23 @@
 NetworkLink::NetworkLink(Protocol proto, std::string localIP, int localPort, std::string remoteIP, int remotePort,
                          bool isServer)
         : protocol(proto), isServer(isServer) {
-    sock_fd = socket(AF_INET,
-                         (protocol == Protocol::TCP) ? SOCK_STREAM : SOCK_DGRAM,
-                         0);
 
-    if (sock_fd < 0) {
-        throw std::runtime_error("Error creating socket");
-    }
-    makeNonBlocking(sock_fd);
+    createSocket();
 
+    if (isServer || protocol == Protocol::UDP) {
+        //LocalStuff
+        sockaddr_in localAddr;
+        localAddr.sin_family = AF_INET;
+        localAddr.sin_port = htons(localPort);
+        inet_pton(AF_INET, localIP.c_str(), &localAddr.sin_addr);
 
-    //LocalStuff
-    sockaddr_in localAddr;
-    localAddr.sin_family = AF_INET;
-    localAddr.sin_port = htons(localPort);
-    inet_pton(AF_INET, localIP.c_str(), &localAddr.sin_addr);
+        //prevent errors with sockets when program crashes
+        int yes = 1;
+        setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
-    //prevent errors with sockets when program crashes
-    int yes = 1;
-    setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-
-    if (bind(sock_fd, (sockaddr*)&localAddr, sizeof(localAddr)) < 0) {
-        throw std::runtime_error("Error binding local socket");
+        if (bind(sock_fd, (sockaddr*)&localAddr, sizeof(localAddr)) < 0) {
+            throw std::runtime_error("Error binding local socket");
+        }
     }
 
     //RemoteStuff
@@ -72,12 +67,17 @@ NetworkLink::~NetworkLink() {
 }
 
 ssize_t NetworkLink::sendData(const void *data, size_t size) {
-    if (protocol == Protocol::TCP) {
-        int fd = isServer ? sock_fd : client_fd;
-        if (fd < 0) return -1;
-        return send(fd, data, size, 0);
+    if (isConnected()) {
+        if (protocol == Protocol::TCP) {
+            int fd = isServer ? client_fd : sock_fd;
+            if (fd < 0) return -1;
+            return send(fd, data, size, 0);
+        } else {
+            return sendto(sock_fd, data, size, 0, (sockaddr*)&remoteAddr, sizeof(remoteAddr));
+        }
     } else {
-        return sendto(sock_fd, data, size, 0, (sockaddr*)&remoteAddr, sizeof(remoteAddr));
+        //log something
+        return -1;
     }
 }
 
@@ -104,12 +104,11 @@ void NetworkLink::recvData() {
             rcvBuf.erase(0, pos+1);
 
             std::lock_guard lock(cb_mutex);
-            if (callback) callback(jsonPacket);
+            if (jsonCallback) jsonCallback(jsonPacket);
         }
     }
     else if (n==0) {
-        close(fd);
-        client_fd = -1;
+        disconnect(fd);
     }
     else {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -145,6 +144,29 @@ void NetworkLink::loop() {
     }
 }
 
+void NetworkLink::createSocket() {
+    sock_fd = socket(AF_INET,
+                         (protocol == Protocol::TCP) ? SOCK_STREAM : SOCK_DGRAM,
+                         0);
+
+    if (sock_fd < 0) {
+        throw std::runtime_error("Error creating socket");
+    }
+    makeNonBlocking(sock_fd);
+}
+
+void NetworkLink::disconnect(int fd) {
+    close(fd);
+    client_fd = -1;
+    clientConnected = false;
+    if (!isServer) {
+        createSocket(); //to attempt reconnection for server
+    }
+
+    std::lock_guard lock(cb_mutex);
+    if (disconnectionCallback) disconnectionCallback(""); //we have a logging parameter to pass but idk what to pass.
+}
+
 bool NetworkLink::attemptConnection() {
     if (protocol != Protocol::TCP || isConnected()) {
         return false; //This function should never be called if it is connected already or if it is a UDP connection
@@ -167,15 +189,15 @@ bool NetworkLink::attemptConnection() {
                                 sizeof(remoteAddr));
         if (result < 0) {
             if (errno == EINPROGRESS || errno == ECONNREFUSED) {
-                std::cout<<errno<<std::endl;
                 return false; //no connection yet
             } else {
-                std::cout<<errno<<std::endl;
                 throw std::runtime_error("connect() failed");
             }
         }
         clientConnected = true;
     }
+    std::lock_guard lock(cb_mutex);
+    if (connectionCallback) connectionCallback("");
     return true;
 }
 

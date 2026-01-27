@@ -12,7 +12,21 @@
 #include <arpa/inet.h>
 
 
-enum class Protocol { TCP, UDP };
+enum class Protocol {
+    TCP,
+    UDP
+};
+
+enum class callbackType {
+    onJsonReceive,
+    onConnection,
+    onDisconnection
+};
+
+constexpr callbackType onJsonReceive = callbackType::onJsonReceive;
+constexpr callbackType onConnection = callbackType::onConnection;
+constexpr callbackType onDisconnection = callbackType::onDisconnection;
+
 
 using networkCallback = std::function<void(const std::string&)>;
 
@@ -24,10 +38,11 @@ class NetworkLink {
     int client_fd = -1; // only used for TCP server
     bool clientConnected = false; //only used for client
 
-
     sockaddr_in remoteAddr{};
 
-    networkCallback callback;
+    networkCallback jsonCallback;
+    networkCallback connectionCallback;
+    networkCallback disconnectionCallback;
     std::mutex cb_mutex;
 
     std::atomic_bool workerRunning;
@@ -41,9 +56,19 @@ public:
     NetworkLink(Protocol proto, std::string localIP, int localPort, std::string remoteIP, int remotePort, bool isServer = false);
     ~NetworkLink();
 
-    void setCallback(networkCallback cb) {
+    void setCallback(callbackType cbT, networkCallback cb) {
         std::lock_guard lock(cb_mutex);
-        callback = cb;
+        switch (cbT) {
+            case onJsonReceive: {
+                jsonCallback = cb;
+            } break;
+            case onConnection: {
+                connectionCallback = cb;
+            } break;
+            case onDisconnection: {
+                disconnectionCallback = cb;
+            } break;
+        }
     };
 
     ssize_t sendData(const void* data, size_t size);
@@ -53,6 +78,8 @@ public:
 
 private:
     void loop();
+    void createSocket();
+    void disconnect(int fd);
     bool attemptConnection();
     void makeNonBlocking(int fd);
 };
