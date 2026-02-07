@@ -7,6 +7,7 @@
 #include <atomic>
 #include <string>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -23,7 +24,8 @@
     X(AVIONIX) \
     X(TELEMETRY) \
     X(COMMS) \
-    X(LOGGING)
+    X(LOGGING) \
+    X(CONFIG)
 
 enum class VerbosityLevel {
 #define X(name) name,
@@ -73,18 +75,20 @@ public:
     bool pop(logMessage& out);
 };
 
-class Logger {
+class Logger : public std::enable_shared_from_this<Logger> {
     FolderPath logFolder;
     FilePath logPath;
 
     std::ofstream logFile;
+
+    VerbosityLevel logLevel;
 
     logQueue queue;
     //thread stuff
     std::atomic_bool _running;
     std::thread worker;
 public:
-    Logger(FolderPath logFolder, std::string SystemName);
+    Logger(FolderPath logFolder, std::string SystemName, VerbosityLevel logLevel);
     ~Logger();
     void println(VerbosityLevel v, SubsystemTag tag, std::string logMessage);
 

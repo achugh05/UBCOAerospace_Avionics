@@ -20,7 +20,7 @@ bool logQueue::pop(logMessage &out) {
     return true;
 }
 
-Logger::Logger(FolderPath logFolder, std::string SystemName) {
+Logger::Logger(FolderPath logFolder, std::string SystemName, VerbosityLevel logLevel) {
     init(logFolder, SystemName);
     _running = true;
     worker = std::thread(&Logger::loop, this);
@@ -103,7 +103,10 @@ std::string Logger::formatMsg(logMessage &m) {
 }
 
 void Logger::println(VerbosityLevel v, SubsystemTag tag, std::string msg) {
-     logMessage logMsg;
+    if (v < logLevel) {
+        return;
+    }
+    logMessage logMsg;
     logMsg.timestamp = time(nullptr);
     logMsg.v_level = v;
     logMsg.s_tag = tag;
