@@ -3,6 +3,8 @@
 //
 
 #include "../include/Logger.h"
+
+#include <filesystem>
 #include <sys/stat.h>
 #include <iomanip>
 #include <iostream>
@@ -27,15 +29,18 @@ Logger::Logger(FolderPath logFolder, std::string SystemName, VerbosityLevel logL
 }
 
 Logger::~Logger() {
-    logFile.close();
-    _running = false;
-    if (worker.joinable()) worker.join();
+    close();
 }
 bool Logger::init(FolderPath path,std::string SystemName) {
     std::string fileName = path;
     if (path.back() != '/') {
         fileName += "/";
     }
+
+    if (!std::filesystem::exists(fileName)) {
+        std::filesystem::create_directory(fileName);
+    }
+
     {
         char buf[90];
         std::time_t t = std::time(nullptr);
@@ -44,10 +49,9 @@ bool Logger::init(FolderPath path,std::string SystemName) {
     }
     fileName.append(" "+SystemName+".log");
 
-    logPath = path+fileName;
+    logPath = fileName;
     std::string initialMessage;
 
-    struct stat sb;
     std::string currentTime;
     {
         char buf[90];
@@ -55,7 +59,7 @@ bool Logger::init(FolderPath path,std::string SystemName) {
         strftime(buf, sizeof(buf), "%H:%M:%S", localtime(&t));
         currentTime = buf;
     }
-    if (stat(logPath.c_str(), &sb) == 0) {
+    if (std::filesystem::exists(logPath)) {
         initialMessage = "___________________________________________________________________________________\n"
                          "Logging Resumed at time:\n"
                          +currentTime+ "\n"
@@ -83,6 +87,7 @@ void Logger::loop() {
     while (_running) {
         while (queue.pop(msg)) {
             logFile<<formatMsg(msg)<<std::endl;
+            std::cout<<formatMsg(msg)<<std::endl;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -113,6 +118,12 @@ void Logger::println(VerbosityLevel v, SubsystemTag tag, std::string msg) {
     logMsg.message = msg;
 
     queue.push(std::move(logMsg));
+}
+
+void Logger::close() {
+    logFile.close();
+    _running = false;
+    if (worker.joinable()) worker.join();
 }
 
 

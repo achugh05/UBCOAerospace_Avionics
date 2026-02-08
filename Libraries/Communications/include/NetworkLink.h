@@ -76,6 +76,7 @@ public:
 
     bool isConnected();
 
+    void closeConn();
 private:
     void loop();
     void createSocket();

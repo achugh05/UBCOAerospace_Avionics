@@ -57,13 +57,7 @@ NetworkLink::NetworkLink(Protocol proto, std::string localIP, int localPort, std
 }
 
 NetworkLink::~NetworkLink() {
-    if (client_fd >= 0) close(client_fd);
-    if (sock_fd >=0) close(sock_fd);
-
-    if (workerRunning) {
-        workerRunning = false;
-        workerThread.join();
-    }
+    closeConn();
 }
 
 ssize_t NetworkLink::sendData(const void *data, size_t size) {
@@ -129,6 +123,15 @@ bool NetworkLink::isConnected() {
     } else {
         return true; //UDP is always connected
     }
+}
+
+void NetworkLink::closeConn() {
+    if (workerRunning) {
+        workerRunning = false;
+        workerThread.join();
+    }
+    if (client_fd >= 0) close(client_fd);
+    if (sock_fd >=0) close(sock_fd);
 }
 
 void NetworkLink::loop() {

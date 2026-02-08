@@ -37,23 +37,27 @@ struct BasicConfig : configBase {
 };
 
 struct NetworkConfig: configBase {
-    std::string host = "localhost";
-    int port = 9000;
+    std::string remoteAddr = "127.0.0.1";
+    int local_port = 9000;
+    int remote_port = 9001;
+
     int timeout_ms = 500;
 
     bool validate(defaults* d) override;
 
     void from_toml(const toml::table& t) override{
-        host = t["host"].value_or(host);
-        port = t["port"].value_or(port);
+        remoteAddr = t["remoteAddr"].value_or(remoteAddr);
+        remote_port = t["remote_port"].value_or(remote_port);
+        local_port = t["local_port"].value_or(local_port);
         timeout_ms = t["timeout_ms"].value_or(timeout_ms);
     }
 
     toml::table to_toml() override{
         return toml::table{
-            {"host", host},
-            {"port", port},
-            {"timeout_ms", port}
+            {"remoteAddr", remoteAddr},
+            {"local_port", local_port},
+            {"remote_port", remote_port},
+            {"timeout_ms", timeout_ms}
         };
     }
 };
@@ -64,7 +68,7 @@ struct SerialConfig : configBase{
 
 struct LoggingConfig :configBase{
     int logLevel = 0;
-    std::string logging_path = "./";
+    std::string logging_path = "./logs";
 
     void from_toml(const toml::table& t) override{
         logLevel = t["logLevel"].value_or(logLevel);
@@ -101,10 +105,17 @@ inline bool NetworkConfig::validate(defaults *d) {
 
     bool r = true;
 
-    if (port <= MINPORT || port > MAXPORT) {
+    if (remote_port <= MINPORT || remote_port > MAXPORT) {
         if (configLoader::getLogger())
-            configLoader::getLogger()->println(VerbosityLevel::FAULT, SubsystemTag::CONFIG, "Specified port outside safe operating range, Fallback to default value");
-        port = d->networkConfig.port;
+            configLoader::getLogger()->println(VerbosityLevel::FAULT, SubsystemTag::CONFIG, "Specified port for remote outside safe operating range, Fallback to default value");
+        remote_port = d->networkConfig.remote_port;
+        r = false;
+    }
+
+    if (local_port <= MINPORT || local_port > MAXPORT) {
+        if (configLoader::getLogger())
+            configLoader::getLogger()->println(VerbosityLevel::FAULT, SubsystemTag::CONFIG, "Specified port for local outside safe operating range, Fallback to default value");
+        local_port = d->networkConfig.local_port;
         r = false;
     }
 
@@ -136,53 +147,6 @@ struct systemConfig {
         return toml::table{};
     }
 
-};
-
-struct FootballStationConfig:systemConfig {
-    BasicConfig basicConfig;
-    NetworkConfig networkConfig;
-    LoggingConfig loggingConfig;
-
-    bool validate() override{
-        return basicConfig.validate(&defaultValues)
-        && networkConfig.validate(&defaultValues)
-        && loggingConfig.validate(&defaultValues);
-    }
-
-    bool from_toml(const toml::table& t) override{
-        if (auto* nt = t["Basic"].as_table()) {
-            basicConfig.from_toml(*nt);
-        } else {
-            return false;
-        }
-        if (auto* nt = t["Network"].as_table()) {
-            networkConfig.from_toml(*nt);
-        } else {
-            return false;
-        }
-        if (auto* nt = t["Logging"].as_table()) {
-            loggingConfig.from_toml(*nt);
-        } else {
-            return false;
-        }
-
-        if (auto* nt = t["Defaults"].as_table()) {
-            defaultValues.from_toml(*nt);
-        } else {
-            return false;
-        }
-
-        return true;
-    }
-
-    toml::table to_toml() override{
-        return toml::table{
-            {"Basic", basicConfig.to_toml()},
-            {"Network", networkConfig.to_toml()},
-            {"Logging", loggingConfig.to_toml()},
-            {"Defaults", defaultValues.to_toml()}
-        };
-    }
 };
 
 struct GroundStationConfig {

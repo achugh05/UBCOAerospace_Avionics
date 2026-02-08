@@ -8,13 +8,9 @@
 #include <configLoader.h>
 
 #include "configStructs.h"
+#include "Classes/Scheduler.h"
 
 std::shared_ptr<Logger> logger = nullptr;
-
-void callbackTest(std::string buf) {
-    std::cout << "Test Json Received: "<< buf << std::endl;
-    logger->println(VerbosityLevel::INFO, SubsystemTag::LOGGING, "Test Json Received: "+buf);
-}
 
 int main () {
     // Serial* s = new Serial("/dev/pts/4", B9600);
@@ -45,13 +41,5 @@ int main () {
     // std::cout << "test Message Sent"<<std::endl;
     // while (true);
 
-    configLoader l{"./config.toml"};
-    FootballStationConfig cfg;
-    bool loaded = l.load(&cfg);
-    logger = std::make_shared<Logger>(cfg.loggingConfig.logging_path, cfg.basicConfig.devName, (VerbosityLevel) cfg.loggingConfig.logLevel);
-    l.setLogger(logger);
-    if (!loaded) {
-        l.createDefaultCFGfile(&cfg);
-    }
-    l.validate(&cfg);
+    Scheduler scheduler{};
 }

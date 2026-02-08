@@ -25,7 +25,8 @@
     X(TELEMETRY) \
     X(COMMS) \
     X(LOGGING) \
-    X(CONFIG)
+    X(CONFIG) \
+    X(NETWORK)
 
 enum class VerbosityLevel {
 #define X(name) name,
@@ -91,6 +92,8 @@ public:
     Logger(FolderPath logFolder, std::string SystemName, VerbosityLevel logLevel);
     ~Logger();
     void println(VerbosityLevel v, SubsystemTag tag, std::string logMessage);
+
+    void close();
 
 private:
     bool init(FolderPath path, std::string SystemName);
