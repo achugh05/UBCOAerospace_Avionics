@@ -11,12 +11,15 @@
 #include <mutex>
 #include <thread>
 
+#include "CommunicationFrameworks.h"
+#include "../../Logging/include/Logger.h"
+
 struct Packet
 {
 
 };
 
-using serialCallback = std::function<void(const std::string&)>;
+using serialCallback = std::function<void(CommPacket)>;
 
 class Serial
 {
@@ -25,11 +28,13 @@ class Serial
 
     serialCallback callback;
 
+    std::shared_ptr<Logger> logger;
+
     std::thread workerLoop;
     std::mutex cbMutex;
     std::atomic_bool _running {false};
 public:
-    Serial(const char *portName, int speed);
+    Serial(const char *portName, int speed, std::shared_ptr<Logger> logger);
     Serial(const Serial&) = delete;
     Serial& operator=(const Serial&) = delete;
 

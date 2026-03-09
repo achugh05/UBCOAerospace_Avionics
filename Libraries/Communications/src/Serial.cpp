@@ -13,7 +13,8 @@
 using std::cerr;
 using std::endl;
 
-Serial::Serial(const char *portName, int speed) {
+Serial::Serial(const char *portName, int speed, std::shared_ptr<Logger> l) {
+    logger = l;
     openSerialPort(portName);
     configureSerialPort(speed);
 
@@ -68,8 +69,10 @@ void Serial::loop() {
                     packet[packetLen] = '\0';
 
                     if (callback) {
+                        std::string s = packet;
+                        messageData p(s.begin(), s.end());
                         std::lock_guard lock(cbMutex);
-                        callback(packet);
+                        callback(CommPacket(p));
                     }
 
                     packetLen = 0;
@@ -79,12 +82,12 @@ void Serial::loop() {
     }
 }
 
-int Serial::openSerialPort(const char *portName) {
+int Serial::openSerialPort(const char* portName) {
     fd = open(portName, O_RDWR | O_NOCTTY | O_SYNC);
     bIsOpen = true;
 
     if (fd < 0) {
-        cerr << "Error opening serial port " << portName << strerror(errno) << endl;
+        logger->println(VerbosityLevel::FAULT, SubsystemTag::COMMS, std::string("Error opening serial port ") + portName +", " +strerror(errno));
         return -1;
     }
 
@@ -94,7 +97,7 @@ int Serial::openSerialPort(const char *portName) {
 bool Serial::configureSerialPort(int speed) {
     struct termios tty;
     if (tcgetattr(fd, &tty) != 0) {
-        cerr << "Error setting serial port attributes: "<<strerror(errno) << endl;
+        logger->println(VerbosityLevel::FAULT, SubsystemTag::COMMS, std::string("Error setting serial port attributes: ") +strerror(errno));
         return false;
     }
 
@@ -127,7 +130,7 @@ bool Serial::configureSerialPort(int speed) {
     tty.c_cc[VTIME] = 10;
 
     if (tcsetattr(fd, TCSANOW, &tty) != 0) {
-        cerr<<"Error setting serial port attributes: "<<strerror(errno) << endl;
+        logger->println(VerbosityLevel::FAULT, SubsystemTag::COMMS, std::string("Error setting serial port attributes: ") +strerror(errno));
         return false;
     }
 

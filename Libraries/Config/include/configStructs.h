@@ -37,6 +37,7 @@ struct BasicConfig : configBase {
 };
 
 struct NetworkConfig: configBase {
+    std::string localAddr = "127.0.0.1";
     std::string remoteAddr = "127.0.0.1";
     int local_port = 9000;
     int remote_port = 9001;
@@ -46,6 +47,7 @@ struct NetworkConfig: configBase {
     bool validate(defaults* d) override;
 
     void from_toml(const toml::table& t) override{
+        localAddr = t["localAddr"].value_or(localAddr);
         remoteAddr = t["remoteAddr"].value_or(remoteAddr);
         remote_port = t["remote_port"].value_or(remote_port);
         local_port = t["local_port"].value_or(local_port);
@@ -54,6 +56,7 @@ struct NetworkConfig: configBase {
 
     toml::table to_toml() override{
         return toml::table{
+            {"localAddr", localAddr},
             {"remoteAddr", remoteAddr},
             {"local_port", local_port},
             {"remote_port", remote_port},
@@ -63,7 +66,21 @@ struct NetworkConfig: configBase {
 };
 
 struct SerialConfig : configBase{
+    std::string port = "/dev/ttyUSB0";
+    int speed = 9600;
 
+    bool validate(defaults* d) override;
+
+    void from_toml(const toml::table& t) override{
+        port = t["serial_port"].value_or(port);
+        speed = t["serial_speed"].value_or(speed);
+    }
+    toml::table to_toml() override{
+        return toml::table{
+                {"serial_port", port},
+                {"serial_speed", speed}
+        };
+    }
 };
 
 struct LoggingConfig :configBase{
@@ -85,6 +102,7 @@ struct LoggingConfig :configBase{
 
 struct defaults{
     NetworkConfig networkConfig;
+    SerialConfig serialConfig;
 
     void from_toml(const toml::table& t){
         if (auto* nt = t["Network"].as_table()) {
@@ -123,6 +141,19 @@ inline bool NetworkConfig::validate(defaults *d) {
         if (configLoader::getLogger())
             configLoader::getLogger()->println(VerbosityLevel::FAULT, SubsystemTag::CONFIG, "Timeout value is lower than minimum safe value, Fallback to default value");
         timeout_ms = d->networkConfig.timeout_ms;
+        r = false;
+    }
+
+    return r;
+}
+
+inline bool SerialConfig::validate(defaults *d) {
+    bool r = true;
+
+    if (strncmp(port.c_str(), "/dev/tty", 8) != 0) {
+        if (configLoader::getLogger())
+            configLoader::getLogger()->println(VerbosityLevel::FAULT, SubsystemTag::CONFIG, "Specified port for serial invalid format, Fallback to default value");
+        port = d->serialConfig.port;
         r = false;
     }
 

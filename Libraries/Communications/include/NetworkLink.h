@@ -11,6 +11,8 @@
 #include <thread>
 #include <arpa/inet.h>
 
+#include "CommunicationFrameworks.h"
+
 
 enum class Protocol {
     TCP,
@@ -18,17 +20,16 @@ enum class Protocol {
 };
 
 enum class callbackType {
-    onJsonReceive,
     onConnection,
     onDisconnection
 };
 
-constexpr callbackType onJsonReceive = callbackType::onJsonReceive;
 constexpr callbackType onConnection = callbackType::onConnection;
 constexpr callbackType onDisconnection = callbackType::onDisconnection;
 
 
-using networkCallback = std::function<void(const std::string&)>;
+using networkCallback = std::function<void(CommPacket)>;
+using connCallback = std::function<void()>;
 
 class NetworkLink {
     Protocol protocol;
@@ -41,8 +42,8 @@ class NetworkLink {
     sockaddr_in remoteAddr{};
 
     networkCallback jsonCallback;
-    networkCallback connectionCallback;
-    networkCallback disconnectionCallback;
+    connCallback connectionCallback;
+    connCallback disconnectionCallback;
     std::mutex cb_mutex;
 
     std::atomic_bool workerRunning;
@@ -56,12 +57,13 @@ public:
     NetworkLink(Protocol proto, std::string localIP, int localPort, std::string remoteIP, int remotePort, bool isServer = false);
     ~NetworkLink();
 
-    void setCallback(callbackType cbT, networkCallback cb) {
+    void setCallback(networkCallback cb) {
+        this->jsonCallback = cb;
+    }
+
+    void setCallback(callbackType cbT, connCallback cb) {
         std::lock_guard lock(cb_mutex);
         switch (cbT) {
-            case onJsonReceive: {
-                jsonCallback = cb;
-            } break;
             case onConnection: {
                 connectionCallback = cb;
             } break;

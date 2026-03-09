@@ -7,16 +7,19 @@
 
 #include "configStructs.h"
 #include "NetworkLink.h"
+#include "Serial.h"
 
 struct FootballStationConfig:systemConfig {
     BasicConfig basicConfig;
     NetworkConfig networkConfig;
+    SerialConfig serialConfig;
     LoggingConfig loggingConfig;
 
     bool validate() override{
         return basicConfig.validate(&defaultValues)
         && networkConfig.validate(&defaultValues)
-        && loggingConfig.validate(&defaultValues);
+        && loggingConfig.validate(&defaultValues)
+        && serialConfig.validate(&defaultValues);
     }
 
     bool from_toml(const toml::table& t) override{
@@ -36,6 +39,11 @@ struct FootballStationConfig:systemConfig {
             return false;
         }
 
+        if (auto* nt = t["Serial"].as_table()) {
+            serialConfig.from_toml(*nt);
+        } else
+            return false;
+
         if (auto* nt = t["_Defaults"].as_table()) {
             defaultValues.from_toml(*nt);
         } else {
@@ -50,6 +58,7 @@ struct FootballStationConfig:systemConfig {
                 {"Basic", basicConfig.to_toml()},
                 {"Network", networkConfig.to_toml()},
                 {"Logging", loggingConfig.to_toml()},
+                {"Serial", serialConfig.to_toml()},
                 {"_Defaults", defaultValues.to_toml()}
         };
     }
@@ -62,7 +71,10 @@ class Scheduler {
     //networkstuff
 
     std::unique_ptr<NetworkLink> TCPconn;
+    std::unique_ptr<NetworkLink> test;
     std::unique_ptr<NetworkLink> UDPconn;
+
+    std::unique_ptr<Serial> Serialconn;
 
 public:
     Scheduler();
@@ -76,12 +88,15 @@ private:
 
 public:
     //Callbacks
-    void networkPacketCB(std::string buf);
-    void serialPacketCB(std::string buf);
+
+    void networkPacketCB(CommPacket packet);
+    void serialPacketCB(CommPacket packet);
 
     void nConnMadeCB();
     void nConnLostCB();
-
+private:
+    void processCommandPacket(CommPacket p);
+    void processTelemetryPacket(CommPacket p);
 };
 
 

@@ -75,7 +75,7 @@ ssize_t NetworkLink::sendData(const void *data, size_t size) {
     }
 }
 
-void NetworkLink::recvData() {
+ void NetworkLink::recvData() {
     char buffer[2048];
     ssize_t n =0;
     int fd = sock_fd;
@@ -91,14 +91,15 @@ void NetworkLink::recvData() {
 
     if (n > 0) {
         rcvBuf.append(buffer, n);
-
         size_t pos;
         while ((pos = rcvBuf.find("\n")) != std::string::npos) {
-            std::string jsonPacket = rcvBuf.substr(0, pos);
+            std::string raw = rcvBuf.substr(0, pos);
             rcvBuf.erase(0, pos+1);
 
+            messageData packet = messageData(raw.begin(), raw.end());
+
             std::lock_guard lock(cb_mutex);
-            if (jsonCallback) jsonCallback(jsonPacket);
+            if (jsonCallback) jsonCallback(CommPacket(packet));
         }
     }
     else if (n==0) {
@@ -167,7 +168,7 @@ void NetworkLink::disconnect(int fd) {
     }
 
     std::lock_guard lock(cb_mutex);
-    if (disconnectionCallback) disconnectionCallback(""); //we have a logging parameter to pass but idk what to pass.
+    if (disconnectionCallback) disconnectionCallback(); //we have a logging parameter to pass but idk what to pass.
 }
 
 bool NetworkLink::attemptConnection() {
@@ -200,7 +201,7 @@ bool NetworkLink::attemptConnection() {
         clientConnected = true;
     }
     std::lock_guard lock(cb_mutex);
-    if (connectionCallback) connectionCallback("");
+    if (connectionCallback) connectionCallback();
     return true;
 }
 
