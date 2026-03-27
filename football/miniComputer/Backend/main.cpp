@@ -8,7 +8,7 @@
 #include <configLoader.h>
 
 #include "configStructs.h"
-#include "Classes/Scheduler.h"
+#include "include/Scheduler.h"
 
 std::shared_ptr<Logger> logger = nullptr;
 

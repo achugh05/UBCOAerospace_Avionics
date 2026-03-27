@@ -53,8 +53,11 @@ class NetworkLink {
 
     size_t sleepTime = 1;
 
+    std::atomic_bool failed = false;
+
+    std::shared_ptr<Logger> logger;
 public:
-    NetworkLink(Protocol proto, std::string localIP, int localPort, std::string remoteIP, int remotePort, bool isServer = false);
+    NetworkLink(std::shared_ptr<Logger> l, Protocol proto, std::string localIP, int localPort, std::string remoteIP, int remotePort, bool isServer = false);
     ~NetworkLink();
 
     void setCallback(networkCallback cb) {

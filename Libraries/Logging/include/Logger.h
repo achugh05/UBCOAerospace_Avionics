@@ -13,20 +13,23 @@
 #include <thread>
 
 #define VerbosityTable \
+    X(DEBUG) \
     X(INFO) \
     X(WARNING) \
     X(FAULT) \
     X(FATAL)
 
 #define SubsystemTable \
-    X(GSE) \
+    X(FOOTBALL) \
     X(STATION) \
+    X(CAPSTONE) \
     X(AVIONIX) \
     X(TELEMETRY) \
     X(COMMS) \
     X(LOGGING) \
     X(CONFIG) \
-    X(NETWORK)
+    X(NETWORK) \
+    X(VIDEO)
 
 enum class VerbosityLevel {
 #define X(name) name,

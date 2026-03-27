@@ -15,8 +15,14 @@ using std::endl;
 
 Serial::Serial(const char *portName, int speed, std::shared_ptr<Logger> l) {
     logger = l;
-    openSerialPort(portName);
-    configureSerialPort(speed);
+    if (openSerialPort(portName) == -1) {
+        bIsOpen = false;
+        return;
+    };
+    if (!configureSerialPort(speed)) {
+        bIsOpen = false;
+        return;
+    }
 
     _running = true;
     workerLoop = std::thread(&Serial::loop, this);
@@ -24,7 +30,8 @@ Serial::Serial(const char *portName, int speed, std::shared_ptr<Logger> l) {
 
 Serial::~Serial() {
     _running = false;
-    workerLoop.join();
+    if (workerLoop.joinable())
+        workerLoop.join();
 
     closeSerialPort();
 }
@@ -46,33 +53,29 @@ void Serial::closeSerialPort() {
     close(fd);
 }
 
-void Serial::sendPacket(const char *buffer, size_t size) {
+void Serial::sendPacket(const void *buffer, size_t size) {
     write(fd, buffer, size);
 }
 
 void Serial::loop() {
-    char buf[256];
-    char packet[2048];
+    uint8_t buf[256];
+    uint8_t packet[2048];
     size_t packetLen = 0;
 
     while (_running) {
         int n = read(fd, buf, sizeof(buf));
         if (n > 0) {
             for (int i = 0; i < n; i++) {
-                char c = buf[i];
+                uint8_t c = buf[i];
 
                 if (packetLen < sizeof(packet)) {
                     packet[packetLen++] = c;
                 }
 
-                if (c == '\n') {
-                    packet[packetLen] = '\0';
-
+                if (c == COMM_FOOTER) {
                     if (callback) {
-                        std::string s = packet;
-                        messageData p(s.begin(), s.end());
                         std::lock_guard lock(cbMutex);
-                        callback(CommPacket(p));
+                        callback(CommPacket(packet, packetLen));
                     }
 
                     packetLen = 0;

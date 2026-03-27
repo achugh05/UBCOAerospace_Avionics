@@ -43,7 +43,7 @@ public:
     void updateSerialPort(const char* portName, int speed);
 
     void closeSerialPort();
-    void sendPacket(const char* buffer, size_t size);
+    void sendPacket(const void* buffer, size_t size);
 
     int getPortID() const {return fd;}
     void setCallback(serialCallback cb) {

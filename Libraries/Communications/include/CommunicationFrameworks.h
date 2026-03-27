@@ -9,9 +9,11 @@
 #include <iostream>
 #include <vector>
 
+#include <Logger.h>
+
 #define COMM_HEADER 0xAB
 #define COMM_VERSION 1
-#define COMM_FOOTER 0xFF
+#define COMM_FOOTER 0xEF
 
 #define SystemIDTable \
     X(lora_station) \
@@ -21,7 +23,7 @@
     X(mega_football) \
     X(pi_station) \
     X(capstone) \
-    X(miniPC) \
+    X(miniPC)
 
 #define CommandTable \
     X(lora_station_diagnostic, 0) \
@@ -38,7 +40,8 @@
     X(Close_All_Servos, 13) \
     X(Calibrate_Pressure_Sensor, 14) \
     X(Clear_Faults, 99) \
-    X(acknowledgement, 100) \
+    X(get_system_state, 102) \
+    X(request_telemetry, 49) \
     X(zero_load_cell, 50) \
     X(scale_to_weight, 51) \
     X(get_zeroed_value, 52) \
@@ -47,13 +50,17 @@
     X(manual_scale_factor, 55) \
     X(change_delay_amount, 56) \
 
+#define AcknowledgeTable \
+    X(acknowledgement, 100) \
+    X(return_system_state, 103) \
+
 #define ErrorTable \
     X(sd_card_error, 208) \
     X(critical_error, 250) \
 
 #define TelemetryTable \
-    X(Main_Telemetry, 101) \
-    X(capstone_Telemetry, 49) \
+    X(Main_Telemetry, 105) \
+    X(capstone_Telemetry, 48) \
 
 enum SystemIDs {
 #define X(name) name,
@@ -64,6 +71,7 @@ enum SystemIDs {
 enum Commands {
 #define X(name, value) name = value,
     CommandTable
+    AcknowledgeTable
     ErrorTable
     TelemetryTable
 #undef X
@@ -87,10 +95,25 @@ static bool isValidSystemId(uint8_t c) {
     return false;
 }
 
+static bool isValidSystemName(std::string c) {
+#define X(name) if (c == #name) return true;
+    SystemIDTable
+#undef X
+    return false;
+}
+
+static SystemIDs getSystemIdFromName(std::string s) {
+#define X(name) if (s == #name) return SystemIDs::name;
+    SystemIDTable
+#undef X
+    return miniPC;
+}
+
 static std::string getCommandName(uint8_t c) {
     switch (c) {
 #define X(name, value) case Commands::name: return #name;
         CommandTable
+        AcknowledgeTable
         ErrorTable
         TelemetryTable
     #undef X
@@ -102,6 +125,7 @@ static bool isValidCommand(uint8_t c) {
     switch (c) {
 #define X(name, value) case Commands::name: return true;
         CommandTable
+        AcknowledgeTable
         ErrorTable
         TelemetryTable
     #undef X
@@ -127,14 +151,41 @@ static bool isTelemetryMsg(uint8_t c) {
     return false;
 }
 
-struct TelemetryData {
-    uint16_t* servoAngles;
-    uint16_t* pressureData;
-};
+static bool isAcknowledge(uint8_t c) {
+    switch (c) {
+#define X(name, value) case Commands::name: return true;
+        AcknowledgeTable
+    #undef X
+    }
+    return false;
+}
+
+static SubsystemTag sourceIDtoSubsystemTag(uint8_t sourceID) {
+    switch (sourceID) {
+        case 0:
+        case 1:
+        case 2:
+        case 5:{
+            return SubsystemTag::STATION;
+        } break;
+        case 3:
+        case 4:
+        case 7:{
+            return SubsystemTag::FOOTBALL;
+        }break;
+        case 6: {
+            return SubsystemTag::CAPSTONE;
+        }
+    }
+
+    return SubsystemTag::FOOTBALL;
+}
 
 using messageData = std::vector<uint8_t>;
+using messagePointer = uint8_t*;
 
 enum PacketType {
+    InvalidPacket,
     CommandPacket,
     AcknowledgementPacket,
     ErrorPacket,
@@ -153,8 +204,13 @@ struct CommPacket {
     uint8_t MessageID;
 
     std::vector<uint8_t> data;
+    uint8_t CRC;
 
     uint8_t footer;
+
+    CommPacket() {
+        header = 0;
+    }
 
     CommPacket(uint8_t DestID, uint8_t SrcID, uint8_t msgID) {
         header = COMM_HEADER;
@@ -162,6 +218,7 @@ struct CommPacket {
         Destination_ID = DestID;
         SourceID = SrcID;
         MessageID = msgID;
+        CRC = computeCRC();
         footer = COMM_FOOTER;
     }
 
@@ -169,64 +226,80 @@ struct CommPacket {
         initCommPacket(packet);
     }
 
-    void initCommPacket(messageData packet) {
-        if (packet.size()>=6) {
-            header = packet[0];
-            version = packet[1];
-            Destination_ID = packet[2];
-            SourceID = packet[3];
-            MessageID = packet[4];
+    CommPacket(messagePointer packet, size_t packetLen) {
+        initCommPacket(packet, packetLen);
+    }
 
-            //length of data
-            data.clear();
-            if (packet.size()!=6) {
-                data.insert(data.end(), packet.begin()+5, packet.end()-1);
-            }
-            footer = packet[packet.size()-1];
+    PacketType getPacketType() {
+        if (!validate()) {
+            return InvalidPacket;
+        } if (isErrorMsg(MessageID)) {
+            return ErrorPacket;
+        } else if (isTelemetryMsg(MessageID)) {
+            return TelemetryPacket;
+        } else if (isAcknowledge(MessageID)) {
+            return AcknowledgementPacket;
+        } else {
+            return CommandPacket;
         }
     }
 
-    bool validate() {
-        return header == COMM_HEADER
-        && version == COMM_VERSION
-        && footer == COMM_FOOTER
-        && isValidSystemId(Destination_ID)
-        && isValidSystemId(SourceID)
-        && isValidCommand(MessageID);
+    void initCommPacket(messageData packet);
+    void initCommPacket(messagePointer packet, size_t packetLen);
+
+    bool validate();
+
+    uint8_t computeCRC();
+    bool validateCRC();
+
+    std::string toString();
+
+    messageData toMessage();
+
+    static CommPacket makeAcknowledgementPacket(SystemIDs source, SystemIDs dest);
+
+    std::string toErrorString();
+};
+
+struct TelemetryData : CommPacket {
+
+    std::vector<uint16_t> servoAngles;
+    std::vector<uint16_t> pressureData;
+
+    bool isValid = false;
+
+    TelemetryData(CommPacket p, int numServos, int numPressure) : CommPacket(p) {
+        servoAngles.resize(numServos);
+        pressureData.resize(numPressure);
+
+        isValid = buildTelemetryData(numServos, numPressure) && validate();
     }
 
-    std::string toString() {
-        std::string str = "{";
-        str += "Dest: "+getSystemIdName(Destination_ID) +" (" + std::to_string(Destination_ID);
-        str += "), Src: "+getSystemIdName(SourceID)+" (" + std::to_string(SourceID);
-        str+= "), MessageID: "+getCommandName(MessageID)+" (" + std::to_string(MessageID);
-        str+= "), Data: [";
-        for (int i = 0; i < data.size(); ++i) {
-            auto d = data[i];
-            str += std::to_string(d);
 
-            if (i != data.size()-1) {
-                str += ", ";
-            }
+    //FOR TESTING PURPOSES ONLY
+    TelemetryData(uint8_t DestID, uint8_t SrcID, std::vector<uint16_t> tData, int numServos, int numPressure): CommPacket(DestID, SrcID, Main_Telemetry) {
+        servoAngles.resize(numServos);
+        pressureData.resize(numPressure);
+
+        for (int i = 0; i < numServos; ++i) {
+            servoAngles[i] = tData[i];
+        }
+        for (int i = 0; i < numPressure; ++i) {
+            pressureData[i] = tData[i+numServos];
         }
 
-        str += "], Valid: " + std::to_string(validate()) + "}";
+        buildMessageData();
 
-        return str;
+        computeCRC();
     }
 
-    messageData toMessage() {
-        std::vector<unsigned char> messageArr = {header, version, Destination_ID, SourceID, MessageID};
-        for (auto d: data) {
-            messageArr.push_back(d);
-        }
+    void buildMessageData();
 
-        messageArr.push_back(footer);
-        messageArr.push_back('\n');
+    bool buildTelemetryData(int numServos, int numPressure);
 
-        return messageArr;
-    }
+    std::string toString();
 
+    bool isValidPacket() { return isValid; }
 
 };
 

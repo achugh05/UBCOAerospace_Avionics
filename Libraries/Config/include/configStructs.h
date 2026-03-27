@@ -36,6 +36,25 @@ struct BasicConfig : configBase {
     }
 };
 
+struct CommunicationConfig: configBase {
+    int resendsBeforeFatal = 5;
+    float timeWaitForAcknowledge = 2; //In Seconds
+
+    bool validate(defaults *d) override;
+
+    void from_toml(const toml::table& t) override {
+        resendsBeforeFatal = t["num_times_to_resend_command"].value_or(resendsBeforeFatal);
+        timeWaitForAcknowledge = t["seconds_to_wait_for_acknowledge"].value_or(timeWaitForAcknowledge);
+    }
+
+    toml::table to_toml() override {
+        return toml::table{
+            {"num_times_to_resend_command", resendsBeforeFatal},
+            {"seconds_to_wait_for_acknowledge", timeWaitForAcknowledge}
+        };
+    }
+};
+
 struct NetworkConfig: configBase {
     std::string localAddr = "127.0.0.1";
     std::string remoteAddr = "127.0.0.1";
@@ -84,7 +103,7 @@ struct SerialConfig : configBase{
 };
 
 struct LoggingConfig :configBase{
-    int logLevel = 0;
+    int logLevel = 1;
     std::string logging_path = "./logs";
 
     void from_toml(const toml::table& t) override{
@@ -103,16 +122,25 @@ struct LoggingConfig :configBase{
 struct defaults{
     NetworkConfig networkConfig;
     SerialConfig serialConfig;
+    CommunicationConfig commConfig;
 
     void from_toml(const toml::table& t){
         if (auto* nt = t["Network"].as_table()) {
             networkConfig.from_toml(*nt);
         }
+        if (auto* nt = t["Serial"].as_table()) {
+            serialConfig.from_toml(*nt);
+        }
+        if (auto* nt = t["CommunicationStandards"].as_table()) {
+            commConfig.from_toml(*nt);
+        }
     }
 
     toml::table to_toml(){
         return toml::table{
-                    {"Network", networkConfig.to_toml()}
+                    {"Network", networkConfig.to_toml()},
+            {"Serial", serialConfig.to_toml()},
+            {"CommunicationStandards", commConfig.to_toml()}
         };
     }
 };
@@ -154,6 +182,25 @@ inline bool SerialConfig::validate(defaults *d) {
         if (configLoader::getLogger())
             configLoader::getLogger()->println(VerbosityLevel::FAULT, SubsystemTag::CONFIG, "Specified port for serial invalid format, Fallback to default value");
         port = d->serialConfig.port;
+        r = false;
+    }
+
+    return r;
+}
+
+inline bool CommunicationConfig::validate(defaults *d) {
+    bool r = true;
+    if (resendsBeforeFatal <= 0) {
+        if (configLoader::getLogger())
+            configLoader::getLogger()->println(VerbosityLevel::FAULT, SubsystemTag::CONFIG, "Number of times to resend commands is invalid (must be a positive number), falling back to defaults");
+        resendsBeforeFatal = d->commConfig.resendsBeforeFatal;
+        r = false;
+    }
+
+    if (timeWaitForAcknowledge <= 0) {
+        if (configLoader::getLogger())
+            configLoader::getLogger()->println(VerbosityLevel::FAULT, SubsystemTag::CONFIG, "Number of seconds to wait for acknowledgement is invalid (must be a positive number), falling back to defaults");
+        timeWaitForAcknowledge = d->commConfig.timeWaitForAcknowledge;
         r = false;
     }
 

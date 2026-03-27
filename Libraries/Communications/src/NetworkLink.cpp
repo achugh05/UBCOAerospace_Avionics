@@ -10,9 +10,11 @@
 #include <stdexcept>
 #include <unistd.h>
 
-NetworkLink::NetworkLink(Protocol proto, std::string localIP, int localPort, std::string remoteIP, int remotePort,
+NetworkLink::NetworkLink(std::shared_ptr<Logger> l, Protocol proto, std::string localIP, int localPort, std::string remoteIP, int remotePort,
                          bool isServer)
         : protocol(proto), isServer(isServer) {
+
+    logger = l;
 
     createSocket();
 
@@ -28,7 +30,9 @@ NetworkLink::NetworkLink(Protocol proto, std::string localIP, int localPort, std
         setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
         if (bind(sock_fd, (sockaddr*)&localAddr, sizeof(localAddr)) < 0) {
-            throw std::runtime_error("Error binding local socket");
+            logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Error binding local socket, port: " + std::to_string(localPort));
+            failed = true;
+            return;
         }
     }
 
@@ -40,15 +44,20 @@ NetworkLink::NetworkLink(Protocol proto, std::string localIP, int localPort, std
     if (protocol == Protocol::TCP) {
         if (isServer) {
             if (listen(sock_fd, 1)< 0 ) {
-                throw std::runtime_error("Error listening for TCP connection");
+                logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Error Listening for TCP connection, port: "+ std::to_string(localPort));
+                failed = true;
+                return;
             }
         } else {
             int result = connect(sock_fd,
                                  (sockaddr*)&remoteAddr,
                                  sizeof(remoteAddr));
 
-            if (result < 0 && errno != EINPROGRESS && errno !=ECONNREFUSED)
-                throw std::runtime_error("connect() failed");
+            if (result < 0 && errno != EINPROGRESS && errno !=ECONNREFUSED) {
+                logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Connect() failed");
+                failed = true;
+                return;
+            }
         }
     }
 
@@ -92,8 +101,8 @@ ssize_t NetworkLink::sendData(const void *data, size_t size) {
     if (n > 0) {
         rcvBuf.append(buffer, n);
         size_t pos;
-        while ((pos = rcvBuf.find("\n")) != std::string::npos) {
-            std::string raw = rcvBuf.substr(0, pos);
+        while ((pos = rcvBuf.find(COMM_FOOTER)) != std::string::npos) {
+            std::string raw = rcvBuf.substr(0, pos+1);
             rcvBuf.erase(0, pos+1);
 
             messageData packet = messageData(raw.begin(), raw.end());
@@ -109,7 +118,8 @@ ssize_t NetworkLink::sendData(const void *data, size_t size) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return; //no Data
         }
-        throw std::runtime_error("Error receiving data");
+        logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Error receiving data");
+        failed = true;
     }
 }
 
@@ -136,7 +146,7 @@ void NetworkLink::closeConn() {
 }
 
 void NetworkLink::loop() {
-    while (workerRunning) {
+    while (workerRunning && !failed) {
         if (isConnected()) {
             recvData();
         } else {
@@ -154,7 +164,9 @@ void NetworkLink::createSocket() {
                          0);
 
     if (sock_fd < 0) {
-        throw std::runtime_error("Error creating socket");
+        logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Error creating socket");
+        failed = true;
+        return;
     }
     makeNonBlocking(sock_fd);
 }
@@ -182,7 +194,9 @@ bool NetworkLink::attemptConnection() {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return false; // no client yet
             } else {
-                throw std::runtime_error("Error accepting connection"); // actual error
+                logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Error attempting connection");
+                failed = true;
+                return false; // actual error
             }
         }
         client_fd = fd;
@@ -195,7 +209,9 @@ bool NetworkLink::attemptConnection() {
             if (errno == EINPROGRESS || errno == ECONNREFUSED) {
                 return false; //no connection yet
             } else {
-                throw std::runtime_error("connect() failed");
+                logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Connect() failed");
+                failed = true;
+                return false;
             }
         }
         clientConnected = true;
