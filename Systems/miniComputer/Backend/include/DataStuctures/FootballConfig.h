@@ -87,39 +87,17 @@ struct TelemetryConfig: configBase {
 };
 
 struct FootballStationConfig:systemConfig {
-
-    BasicConfig basicConfig;
     ManagementConfig managementConfig;
-    CommunicationConfig commConfig;
     TelemetryConfig telemetry_config;
-    NetworkConfig networkConfig;
-    SerialConfig serialConfig;
-    LoggingConfig loggingConfig;
 
-    bool validate() override{
-        return basicConfig.validate(&defaultValues)
-        &&managementConfig.validate(&defaultValues)
-        && commConfig.validate(&defaultValues)
-        && telemetry_config.validate(&defaultValues)
-        && networkConfig.validate(&defaultValues)
-        && loggingConfig.validate(&defaultValues)
-        && serialConfig.validate(&defaultValues);
+    bool validate() override {
+        return systemConfig::validate()
+            && managementConfig.validate(&defaultValues)
+            && telemetry_config.validate(&defaultValues);
     }
-
     bool from_toml(const toml::table& t) override{
-        if (auto* nt = t["Basic"].as_table()) {
-            basicConfig.from_toml(*nt);
-        } else {
-            return false;
-        }
         if (auto* nt = t["SystemManagement"].as_table()) {
             managementConfig.from_toml(*nt);
-        } else {
-            return false;
-        }
-
-        if (auto* nt = t["CommunicationStandards"].as_table()) {
-            commConfig.from_toml(*nt);
         } else {
             return false;
         }
@@ -129,42 +107,15 @@ struct FootballStationConfig:systemConfig {
             return false;
         }
 
-        if (auto* nt = t["Network"].as_table()) {
-            networkConfig.from_toml(*nt);
-        } else {
-            return false;
-        }
-        if (auto* nt = t["Logging"].as_table()) {
-            loggingConfig.from_toml(*nt);
-        } else {
-            return false;
-        }
-
-        if (auto* nt = t["Serial"].as_table()) {
-            serialConfig.from_toml(*nt);
-        } else
-            return false;
-
-        if (auto* nt = t["_Defaults"].as_table()) {
-            defaultValues.from_toml(*nt);
-        } else {
-            return false;
-        }
-
-        return true;
+        return systemConfig::from_toml(t);
     }
 
     toml::table to_toml() override{
-        return toml::table{
-                    {"Basic", basicConfig.to_toml()},
-                    {"SystemManagement", managementConfig.to_toml()},
-                    {"CommunicationStandards", commConfig.to_toml()},
-                    {"Telemetry", telemetry_config.to_toml()},
-                    {"Network", networkConfig.to_toml()},
-                    {"Logging", loggingConfig.to_toml()},
-                    {"Serial", serialConfig.to_toml()},
-                    {"_Defaults", defaultValues.to_toml()}
-        };
+        toml::table tbl = systemConfig::to_toml();
+        tbl.insert("SystemManagement", managementConfig.to_toml());
+        tbl.insert("Telemetry", telemetry_config.to_toml());
+
+        return tbl;
     }
 };
 

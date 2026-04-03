@@ -190,7 +190,6 @@ enum PacketType {
     AcknowledgementPacket,
     ErrorPacket,
     TelemetryPacket,
-    VideoPacket,
 };
 
 struct CommPacket {

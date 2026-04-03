@@ -8,7 +8,7 @@
 #include <configLoader.h>
 
 #include "configStructs.h"
-#include "include/Scheduler.h"
+#include "include/Scheduler_miniPC.h"
 
 std::shared_ptr<Logger> logger = nullptr;
 
@@ -41,5 +41,5 @@ int main () {
     // std::cout << "test Message Sent"<<std::endl;
     // while (true);
 
-    Scheduler scheduler{};
+    Scheduler_miniPC scheduler{};
 }

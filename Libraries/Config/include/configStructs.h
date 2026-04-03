@@ -210,19 +210,70 @@ inline bool CommunicationConfig::validate(defaults *d) {
 
 
 struct systemConfig {
+    BasicConfig basicConfig;
+    CommunicationConfig commConfig;
+    NetworkConfig networkConfig;
+    SerialConfig serialConfig;
+    LoggingConfig loggingConfig;
     defaults defaultValues;
 
     virtual ~systemConfig(){}
 
     virtual bool validate() {
-        return true;
+        return basicConfig.validate(&defaultValues)
+        && commConfig.validate(&defaultValues)
+        && networkConfig.validate(&defaultValues)
+        && loggingConfig.validate(&defaultValues)
+        && serialConfig.validate(&defaultValues);
     }
 
     virtual bool from_toml(const toml::table& t) {
+
+        if (auto* nt = t["Basic"].as_table()) {
+            basicConfig.from_toml(*nt);
+        } else {
+            return false;
+        }
+
+        if (auto* nt = t["CommunicationStandards"].as_table()) {
+            commConfig.from_toml(*nt);
+        } else {
+            return false;
+        }
+
+        if (auto* nt = t["Network"].as_table()) {
+            networkConfig.from_toml(*nt);
+        } else {
+            return false;
+        }
+        if (auto* nt = t["Logging"].as_table()) {
+            loggingConfig.from_toml(*nt);
+        } else {
+            return false;
+        }
+
+        if (auto* nt = t["Serial"].as_table()) {
+            serialConfig.from_toml(*nt);
+        } else
+            return false;
+
+        if (auto* nt = t["_Defaults"].as_table()) {
+            defaultValues.from_toml(*nt);
+        } else {
+            return false;
+        }
+
         return true;
     }
     virtual toml::table to_toml() {
-        return toml::table{};
+        return toml::table{
+                {"Basic", basicConfig.to_toml()},
+                {"CommunicationStandards", commConfig.to_toml()},
+                {"Network", networkConfig.to_toml()},
+                {"Logging", loggingConfig.to_toml()},
+                {"Serial", serialConfig.to_toml()},
+                {"_Defaults", defaultValues.to_toml()}
+        };;
     }
 
 };

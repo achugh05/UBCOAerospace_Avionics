@@ -22,9 +22,10 @@
 
 
 struct CameraConfig : configBase{
-    std::vector<std::string> devices = {"dev/video0"};
+    std::vector<std::string> devices = {"/dev/video0"};
     int width = 1600;
     int height = 1200;
+    int firstPort = 7000;
 
     bool validate(defaults *d) override {
         bool r = true;
@@ -32,7 +33,7 @@ struct CameraConfig : configBase{
             auto s = devices[i];
             if (strncmp(s.c_str(), "/dev/video", 10) != 0) {
                 if (configLoader::getLogger())
-                    configLoader::getLogger()->println(VerbosityLevel::WARNING, SubsystemTag::CONFIG, "Specified device path"+ s +" is Invalid, removing from list");
+                    configLoader::getLogger()->println(VerbosityLevel::WARNING, SubsystemTag::CONFIG, "Specified device path "+ s +" is Invalid, removing from list");
 
                 devices.erase(devices.begin() + i);
                 r=false;
@@ -53,6 +54,13 @@ struct CameraConfig : configBase{
             r=false;
         }
 
+        if (firstPort <= MINPORT || firstPort > MAXPORT) {
+            if (configLoader::getLogger())
+                configLoader::getLogger()->println(VerbosityLevel::FAULT, SubsystemTag::CONFIG, "Specified port for remote outside safe operating range, Fallback to default value");
+            firstPort = 7000;
+            r = false;
+        }
+
         return r;
     }
 
@@ -67,12 +75,14 @@ struct CameraConfig : configBase{
 
         width = t["camera_width"].value_or(width);
         height = t["camera_height"].value_or(height);
+        firstPort = t["first_camera_port"].value_or(firstPort);
     }
 
     toml::table to_toml() {
         toml::table tbl{
-          {"camera_width", width},
-            {"camera_height",height}
+            {"camera_width", width},
+            {"camera_height",height},
+            {"first_camera_port", firstPort}
         };
 
         toml::array arr;
@@ -127,9 +137,13 @@ private:
     void captureLoop();
 };
 
-struct CameraFrame {
+struct VideoFrame {
     uint32_t frameID;
     std::vector<uint8_t> img;
+};
+
+class videoBuffer {
+    std::vector<VideoFrame> frames;
 };
 
 class CameraReceiver {

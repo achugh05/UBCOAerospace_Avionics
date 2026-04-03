@@ -54,7 +54,7 @@ NetworkLink::NetworkLink(std::shared_ptr<Logger> l, Protocol proto, std::string 
                                  sizeof(remoteAddr));
 
             if (result < 0 && errno != EINPROGRESS && errno !=ECONNREFUSED) {
-                logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Connect() failed");
+                logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, std::string("Connect() failed ")+strerror(errno));
                 failed = true;
                 return;
             }
@@ -164,7 +164,7 @@ void NetworkLink::createSocket() {
                          0);
 
     if (sock_fd < 0) {
-        logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Error creating socket");
+        logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, std::string("Error creating socket")+strerror(errno));
         failed = true;
         return;
     }
@@ -206,10 +206,10 @@ bool NetworkLink::attemptConnection() {
                                 (sockaddr*)&remoteAddr,
                                 sizeof(remoteAddr));
         if (result < 0) {
-            if (errno == EINPROGRESS || errno == ECONNREFUSED) {
+            if (errno == EINPROGRESS || errno == ECONNREFUSED || errno == EALREADY) {
                 return false; //no connection yet
             } else {
-                logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, "Connect() failed");
+                logger->println(VerbosityLevel::FATAL, SubsystemTag::NETWORK, std::string("Connect() failed ") + strerror(errno));
                 failed = true;
                 return false;
             }

@@ -8,6 +8,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include "../include/Camera.h"
+
 
 VideoLink::VideoLink(std::shared_ptr<Logger> l, std::string localIP, int localPort, std::string remoteIP, int remotePort, bool isReceive) {
     logger = l;
@@ -115,7 +117,7 @@ void VideoLink::recvData() {
         // Deliver full MJPEG frame
         std::lock_guard lock(cb_mutex);
         if (frameCallback)
-            frameCallback(CameraFrame{hdr.frameId, jpeg});
+            frameCallback(VideoFrame{hdr.frameId, jpeg});
 
     }
 }

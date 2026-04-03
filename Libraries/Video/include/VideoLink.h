@@ -11,14 +11,14 @@
 #include <string>
 #include <thread>
 #include <netinet/in.h>
-
-#include "Camera.h"
 #include "Logger.h"
 
 #define UDPPACKETSIZE 1400
 
 
-using videoCallback = std::function<void(CameraFrame)>;
+struct VideoFrame;
+
+using videoCallback = std::function<void(VideoFrame)>;
 
 struct VideoHeader {
     uint32_t frameId;     // increments every frame

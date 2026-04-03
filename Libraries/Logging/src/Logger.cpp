@@ -23,6 +23,7 @@ bool logQueue::pop(logMessage &out) {
 }
 
 Logger::Logger(FolderPath logFolder, std::string SystemName, VerbosityLevel logLevel) {
+    this->logLevel = logLevel;
     init(logFolder, SystemName);
     _running = true;
     worker = std::thread(&Logger::loop, this);
