@@ -1,4 +1,5 @@
-add_library(video STATIC src/Camera.cpp
+add_library(video STATIC
+        src/Camera.cpp
         src/VideoLink.cpp)
 
 target_link_libraries(video PRIVATE logging)

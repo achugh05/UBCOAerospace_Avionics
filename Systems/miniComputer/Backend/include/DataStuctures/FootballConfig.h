@@ -4,6 +4,7 @@
 
 #ifndef GSE_FOOTBALLCONFIG_H
 #define GSE_FOOTBALLCONFIG_H
+#include "Camera.h"
 #include "CommunicationFrameworks.h"
 #include "configStructs.h"
 
@@ -89,11 +90,13 @@ struct TelemetryConfig: configBase {
 struct FootballStationConfig:systemConfig {
     ManagementConfig managementConfig;
     TelemetryConfig telemetry_config;
+    CameraReceiveConfig cameraConfig;
 
     bool validate() override {
         return systemConfig::validate()
             && managementConfig.validate(&defaultValues)
-            && telemetry_config.validate(&defaultValues);
+            && telemetry_config.validate(&defaultValues)
+            && cameraConfig.validate(&defaultValues);
     }
     bool from_toml(const toml::table& t) override{
         if (auto* nt = t["SystemManagement"].as_table()) {
@@ -107,6 +110,12 @@ struct FootballStationConfig:systemConfig {
             return false;
         }
 
+        if (auto* nt = t["Cameras"].as_table()) {
+            cameraConfig.from_toml(*nt);
+        } else {
+            return false;
+        }
+
         return systemConfig::from_toml(t);
     }
 
@@ -114,6 +123,7 @@ struct FootballStationConfig:systemConfig {
         toml::table tbl = systemConfig::to_toml();
         tbl.insert("SystemManagement", managementConfig.to_toml());
         tbl.insert("Telemetry", telemetry_config.to_toml());
+        tbl.insert("Cameras", cameraConfig.to_toml());
 
         return tbl;
     }

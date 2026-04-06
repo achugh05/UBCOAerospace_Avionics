@@ -7,6 +7,7 @@ add_executable(PI main.cpp
         src/Scheduler_PI.cpp
         include/Scheduler_PI.h)
 
+target_link_libraries(PI PRIVATE video)
 target_link_libraries(PI PRIVATE communication)
 target_link_libraries(PI PRIVATE logging)
 target_link_libraries(PI PRIVATE config)

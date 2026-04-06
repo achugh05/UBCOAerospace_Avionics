@@ -8,15 +8,44 @@ Scheduler_PI::Scheduler_PI() {
     std::cout<<"Press enter to exit"<<std::endl;
     cfgRef = &cfg;
     init(false);
+    initCameras();
 
     std::cin.sync();
     std::cin.get();
 }
 
 Scheduler_PI::~Scheduler_PI() {
+    for (auto& cam: cameraStreamers) {
+        cam->stop();
+    }
+
     TCPconn->closeConn();
     UDPconn->closeConn();
     logger->close();
+}
+
+void Scheduler_PI::initCameras() {
+    for (int i = 0; i < cfg.cameraConfig.devices.size(); ++i) {
+        auto dev = cfg.cameraConfig.devices[i];
+        auto vidLink = std::make_unique<VideoLink>(logger, cfg.networkConfig.localAddr,7000,
+                                                            cfg.networkConfig.remoteAddr, 7001);
+        cameraStreamers.push_back(std::make_unique<CameraStreamer>(
+            CameraDevice{
+                dev,
+                cfg.cameraConfig.width,
+                cfg.cameraConfig.height
+            },
+            std::move(vidLink),
+            logger
+            )
+        );
+    }
+
+    for (auto& cam: cameraStreamers) {
+        cam->prepareStream();
+    }
+
+    logger->println(VerbosityLevel::INFO, SubsystemTag::VIDEO, "Camera streaming initialized");
 }
 
 void Scheduler_PI::networkPacketTCP_CB(CommPacket packet) {
@@ -78,10 +107,17 @@ void Scheduler_PI::serialPacketCB(CommPacket packet) {
 
 void Scheduler_PI::nConnMadeCB() {
     logger->println(VerbosityLevel::INFO, SubsystemTag::NETWORK, "Successfully Connected (TCP)");
+    for (auto& cam : cameraStreamers) {
+        cam->startSending();
+    }
 }
 
 void Scheduler_PI::nConnLostCB() {
     logger->println(VerbosityLevel::FAULT, SubsystemTag::NETWORK, "Unexpected disconnection occured, attempting recconnection (TCP)");
+
+    for (auto& cam : cameraStreamers) {
+        cam->pauseSending();
+    }
 }
 
 commandResponseAction Scheduler_PI::processPacket(CommPacket p) {

@@ -4,8 +4,9 @@
 
 #ifndef GSE_PICONFIG_H
 #define GSE_PICONFIG_H
+#include "Camera.h"
 #include "configStructs.h"
-#include "../../../../Libraries/Video/include/Camera.h"
+
 
 
 struct PiConfig : systemConfig {

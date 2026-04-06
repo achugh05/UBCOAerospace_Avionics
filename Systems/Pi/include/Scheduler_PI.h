@@ -12,6 +12,7 @@
 class Scheduler_PI : Scheduler{
     PiConfig cfg;
 
+    std::vector<std::unique_ptr<CameraStreamer>> cameraStreamers;
 
 public:
     Scheduler_PI();
@@ -19,6 +20,8 @@ public:
 
 public:
     //Callbacks
+
+    void initCameras();
 
     void networkPacketTCP_CB(CommPacket packet) override;
     void networkPacketUDP_CB(CommPacket packet) override;

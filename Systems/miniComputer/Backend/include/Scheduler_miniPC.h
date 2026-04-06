@@ -7,8 +7,9 @@
 
 #include "configStructs.h"
 #include "NetworkLink.h"
+#include "Scheduler.h"
 #include "Serial.h"
-#include "../../../../Libraries/SystemBase/include/Scheduler.h"
+
 #include "DataStuctures/FootballConfig.h"
 #include "DataStuctures/Subsystem.h"
 
@@ -19,12 +20,16 @@ class Scheduler_miniPC : Scheduler{
     //Management Stuff
     std::map<std::string, Subsystem> connectedSubsystems;
 
+    //Camera stuff
+    std::vector<std::unique_ptr<CameraReceiver>> cameraLinks;
+
 public:
     Scheduler_miniPC();
     ~Scheduler_miniPC() override;
 
 private:
     void initConnectedSystems();
+    void initCameraSystems();
 public:
     //Callbacks
 

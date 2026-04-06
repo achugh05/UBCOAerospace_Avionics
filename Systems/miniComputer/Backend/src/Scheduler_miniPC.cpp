@@ -10,6 +10,8 @@ Scheduler_miniPC::Scheduler_miniPC() {
     std::cout<<"Press enter to exit"<<std::endl;
     cfgRef = &cfg;
     init(true);
+    initConnectedSystems();
+    initCameraSystems();
 
     std::cin.sync();
     std::cin.get();
@@ -27,6 +29,20 @@ void Scheduler_miniPC::initConnectedSystems() {
     for (auto s: cfg.managementConfig.systemsInNetwork) {
         connectedSubsystems[s] = Subsystem(s);
     }
+}
+
+void Scheduler_miniPC::initCameraSystems() {
+    for (int i = 0; i < cfg.cameraConfig.numCameras; ++i) {
+        auto link = std::make_unique<VideoLink>(logger, cfg.networkConfig.localAddr, 7001, cfg.networkConfig.remoteAddr, 7000, true);
+
+        cameraLinks.push_back(std::make_unique<CameraReceiver>(
+            i+1,
+            logger,
+            std::move(link)
+        ));
+    }
+
+    logger->println(VerbosityLevel::INFO, SubsystemTag::VIDEO, "Camera streaming initialized");
 }
 
 void Scheduler_miniPC::networkPacketTCP_CB(CommPacket packet) {

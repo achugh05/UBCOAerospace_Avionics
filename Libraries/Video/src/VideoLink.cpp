@@ -13,6 +13,7 @@
 
 VideoLink::VideoLink(std::shared_ptr<Logger> l, std::string localIP, int localPort, std::string remoteIP, int remotePort, bool isReceive) {
     logger = l;
+    frameStorage = new frameBuilder();
 
     createSocket();
 
@@ -40,11 +41,16 @@ VideoLink::VideoLink(std::shared_ptr<Logger> l, std::string localIP, int localPo
     if (isReceive) {
         workerRunning = true;
         workerThread = std::thread(&VideoLink::loop, this);
+
+        logger->println(VerbosityLevel::DEBUG, SubsystemTag::VIDEO, "Starting worker thread");
     }
+
+    logger->println(VerbosityLevel::DEBUG, SubsystemTag::VIDEO, "Socket created on port: "+std::to_string(localPort) +" listening on address " + localIP);
 }
 
 VideoLink::~VideoLink() {
     closeConn();
+    delete frameStorage;
 }
 
 ssize_t VideoLink::sendData(const uint8_t *data, size_t size) {
@@ -69,6 +75,8 @@ ssize_t VideoLink::sendData(const uint8_t *data, size_t size) {
         count += sendto(sock_fd, packet, sizeof(hdr)+chunkSize, 0, (sockaddr*)&remoteAddr, sizeof(remoteAddr));
     }
 
+    logger->println(VerbosityLevel::DEBUG, SubsystemTag::VIDEO, "Sending camera frame #"+ std::to_string(frameID));
+
     return count;
 }
 
@@ -86,38 +94,18 @@ void VideoLink::recvData() {
     const uint8_t* payload = buffer + sizeof(hdr);
     size_t payloadSize = n - sizeof(hdr);
 
-    int index = hdr.frameId - (currentFrame-1);
+    logger->println(VerbosityLevel::DEBUG, SubsystemTag::VIDEO, "Received Frame Data for frame: "+std::to_string(hdr.frameId));
 
-    //New Frame?
-    if ( index > storedFrames.size()) {
-        storedFrames.resize(index);
-        storedFrames[index].resize(hdr.packetCount);
+    frameStorage->putPacket(hdr, payload, payloadSize);
 
-        expectedPacketForFrames.resize(index);
-        expectedPacketForFrames[index] = {hdr.packetCount, 0};
-    }
+    auto frame = frameStorage->popCompletedFrame(hdr.frameId);
 
-    if (expectedPacketForFrames[index].first != hdr.packetCount) {
-        storedFrames[index].resize(hdr.packetCount);
-        expectedPacketForFrames[index] = {hdr.packetCount, 0};
-    }
-
-    if (storedFrames[index][hdr.packetId].empty()) {
-        storedFrames[index][hdr.packetId].assign(payload, payload + payloadSize);
-        expectedPacketForFrames[index].second++;
-    }
-
-    if (expectedPacketForFrames[index].first == expectedPacketForFrames[index].second) {
-        std::vector<uint8_t> jpeg;
-
-        for (auto& pkt : storedFrames[index]) {
-            jpeg.insert(jpeg.end(), pkt.begin(), pkt.end());
-        }
-
+    if (frame) {
         // Deliver full MJPEG frame
         std::lock_guard lock(cb_mutex);
         if (frameCallback)
-            frameCallback(VideoFrame{hdr.frameId, jpeg});
+            frameCallback(*frame);
+
 
     }
 }
@@ -126,7 +114,8 @@ void VideoLink::recvData() {
 void VideoLink::closeConn() {
     if (workerRunning) {
         workerRunning = false;
-        workerThread.join();
+        if (workerThread.joinable())
+            workerThread.join();
     }
     if (sock_fd >=0) close(sock_fd);
 }
