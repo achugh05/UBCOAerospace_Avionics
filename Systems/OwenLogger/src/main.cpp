@@ -23,6 +23,7 @@
  * 2.0.1: Added assertions for improved testing
  * 2.1.0: Refactored to make it easier for contributors to modify
  * 2.1.1: Older data files no longer get overwritten on SD card initialization
+ * 2.1.2: Improved ADC1 timings
  * 
  * 
  *******************************************************************************
@@ -235,16 +236,16 @@ Adafruit_NAU7802 adc1;
 
 void initADC0() {
   constexpr uint8_t ADC0_SAMPLE_RATE = DRATE_30000SPS;
-  constexpr uint8_t ADC0_PGA = PGA_1;
+  constexpr uint8_t ADC0_GAIN = PGA_1;
 
   adc0.InitializeADC();
   adc0.setDRATE(ADC0_SAMPLE_RATE);
-  adc0.setPGA(ADC0_PGA);
+  adc0.setPGA(ADC0_GAIN);
 }
 
 void initADC1() {
   constexpr NAU7802_SampleRate ADC1_SAMPLE_RATE = NAU7802_RATE_320SPS;
-  constexpr NAU7802_Gain ADC1_PGA = NAU7802_GAIN_1;
+  constexpr NAU7802_Gain ADC1_GAIN = NAU7802_GAIN_1;
 
   if (!adc1.begin(&Wire)) {
     logger::warn("ADC1 was not found! Continuing...");
@@ -254,7 +255,7 @@ void initADC1() {
   if (!adc1.setRate(ADC1_SAMPLE_RATE)) {
     logger::warn("ADC1 could not adjust conversion rate. Continuing...");
   }
-  if (!adc1.setGain(ADC1_PGA)) {
+  if (!adc1.setGain(ADC1_GAIN)) {
     logger::warn("ADC1 could not adjust programmable gain. Continuing...");
   }
 
@@ -262,35 +263,51 @@ void initADC1() {
 
 /* Add user sensor read functions here */
 void readADC0() {
+  // constexpr uint32_t ADC1_MINIMUM_PERIOD_US = 1850;
+
   int32_t frame[ADC0_FRAME_SIZE];
-  // use `esp_timer_get_time()` instead of `micros()`, latter has greater
-  uint64_t time_us = esp_timer_get_time();
+  // use `esp_timer_get_time()` instead of `micros()` so that timing can last
+  // longer than 1.2 hours
+  uint64_t timeNow_us = esp_timer_get_time();
 
   // Keep this loop as small as possible!
   for (int i = 0; i < 8; i++) {
     frame[i] = adc0.cycleSingle();
   }
 
-  (void)logger::pushRecord(time_us, ADC0_DATA_ID, frame, sizeof(frame));
+  (void)logger::pushRecord(timeNow_us, ADC0_DATA_ID, frame, sizeof(frame));
 }
 
 void readADC1() {
+  constexpr uint64_t ADC1_MINIMUM_PERIOD_US = 3700;
+  static uint64_t lastSample_us = 0;
+
+  int32_t frame[ADC1_FRAME_SIZE];
+  uint64_t timeNow_us = esp_timer_get_time();
+
+  // The NAU7802 takes a long time to transfer data over I2C. To improve data
+  // throughput, we wait the equiavlent of 2 ADC0 reads before reading ADC1.
+  if (timeNow_us < lastSample_us + ADC1_MINIMUM_PERIOD_US) {
+    return;
+  }
+
   if (!adc1.available()) {
     return;
   }
-  int32_t frame[ADC1_FRAME_SIZE];
-  uint64_t time_us = esp_timer_get_time();
   if (!adc1.setChannel(0)) {
     return;
   }
   frame[0] = adc1.read();
 
-  if (!adc1.setChannel(1)) {
-    return;
-  }
-  frame[1] = adc1.read();
+  // Uncomment for Adafruit NAU7802 Rev. B
+  // if (!adc1.setChannel(1)) {
+  //   return;
+  // }
+  // frame[1] = adc1.read();
 
-  (void)logger::pushRecord(time_us, ADC1_DATA_ID, frame, sizeof(frame));
+  (void)logger::pushRecord(timeNow_us, ADC1_DATA_ID, frame, sizeof(frame));
+
+  lastSample_us = timeNow_us;
 }
 
 bool testADC0() {
