@@ -12,11 +12,16 @@
  * All code is kept within a single file to allow for use with the Arduino IDE.
  * 
  * Author: Julian Joaquin
- * Date: 2026-Apr-08
- * Version: 2.1.1
+ * Date: 2026-Apr-12
+ * Version: 2.1.3
  * 
- * ADC0: ADS1256
- * ADC1: NAU7802
+ * UBCOAerospace Documentation Number: AV-150
+ * https://docs.google.com/document/d/1tIKWsfECGXwelr0VX9gijRTnHiamDkwW28PKUmJZjNk/edit?usp=sharing
+ * 
+ * ATTACHED SENSORS:
+ * ADC0: ADS1256 - 8-CH Delta-sigma SPI ADC configured single-ended
+ * ADC1: NAU7802 - 1-CH Delta-sigma I2C ADC configured differential paired
+ *                 (Rev. B has 2-CH)
  * 
  * CHANGELOG:
  * 2.0.0: Release
@@ -24,6 +29,7 @@
  * 2.1.0: Refactored to make it easier for contributors to modify
  * 2.1.1: Older data files no longer get overwritten on SD card initialization
  * 2.1.2: Improved ADC1 timings
+ * 2.1.3: More explicit ADC settings, PlatformIO integration, V4 .py script
  * 
  * 
  *******************************************************************************
@@ -57,9 +63,10 @@
 
 #include <Arduino.h>
 
-#include <atomic>
-#include <esp_system.h>
-#include <esp_timer.h>
+#include <atomic>         // Logger internal -- additional concurrency support
+
+#include <esp_system.h>   // ESP32 restart and shutdown
+#include <esp_timer.h>    // ESP32 hardware timers
 #include <SPI.h>
 #include <SD.h>
 
@@ -83,8 +90,15 @@
  * USER DEFINES
  ******************************************************************************/
 
+#ifndef USING_PLATFORMIO_FLAGS
+
+ // Leave commented. Metadata file still unsupported.
 //#define USE_METADATA_FILE
-#define ENABLE_LOGGER_ASSERTS
+
+// Comment out in production. Enable assertions for testing.
+//#define ENABLE_LOGGER_ASSERTS
+
+#endif // USING_PLATFORMIO_FLAGS
 
 /*******************************************************************************
  * LOGGER MACROS (INTERNAL ONLY, DO NOT MODIFY)
@@ -210,14 +224,17 @@ namespace logger {
 // VREF on QYF-0722V2 uses ADR03 2.5V voltage reference
 constexpr float_t ADS1256_VREF   = 2.500;
 
+// Data ID for ADC0 - ADS1256. ID must be between 0 and 255.
+// For this device I simply chose the last 2 digits of the part number (56).
 constexpr uint8_t ADC0_DATA_ID   = 56;
+// Frame size 8 for 8 different ADC channels.
 constexpr size_t ADC0_FRAME_SIZE = 8;
 
+// Data ID for ADC1 - NAU7802. ID must be between 0 and 255.
+// For this device I simply chose the last 2 digits of the part number (02).
 constexpr uint8_t ADC1_DATA_ID   = 2;
+// ADC1 uses frame size 2 to support both Adafruit NAU7802 rev. A and B.
 constexpr size_t ADC1_FRAME_SIZE = 2;
-
-// Flag to skip sampling ADC1
-bool ADC1NotPresent = false;
 
 SPIClass adcSpi(VSPI);
 
@@ -235,37 +252,47 @@ Adafruit_NAU7802 adc1;
 /* Add user sensor init functions here */
 
 void initADC0() {
+  // true measured voltage scale = VREF * 2 / PGA
+
   constexpr uint8_t ADC0_SAMPLE_RATE = DRATE_30000SPS;
   constexpr uint8_t ADC0_GAIN = PGA_1;
+  constexpr uint8_t ADC0_BUFFER_ENABLE = 1;
 
   adc0.InitializeADC();
   adc0.setDRATE(ADC0_SAMPLE_RATE);
   adc0.setPGA(ADC0_GAIN);
+  adc0.setBuffer(ADC0_BUFFER_ENABLE); // QYF-0722V2 intended for use with buffer
 }
 
 void initADC1() {
+  // true measured voltage scale = V_LDO / PGA
+
   constexpr NAU7802_SampleRate ADC1_SAMPLE_RATE = NAU7802_RATE_320SPS;
-  constexpr NAU7802_Gain ADC1_GAIN = NAU7802_GAIN_1;
+  constexpr NAU7802_LDOVoltage ADC1_LDO_VOLTAGE = NAU7802_3V0;
+  constexpr NAU7802_Gain ADC1_GAIN = NAU7802_GAIN_64;
 
   if (!adc1.begin(&Wire)) {
-    logger::warn("ADC1 was not found! Continuing...");
-    ADC1NotPresent = true;
-    return;
+    logger::faultHandler("ADC1 was not found!");
   }
-  if (!adc1.setRate(ADC1_SAMPLE_RATE)) {
-    logger::warn("ADC1 could not adjust conversion rate. Continuing...");
+  if (!adc1.setLDO(ADC1_LDO_VOLTAGE)) {
+    logger::warn("ADC1 could not adjust LDO voltage. Continuing...");
   }
   if (!adc1.setGain(ADC1_GAIN)) {
     logger::warn("ADC1 could not adjust programmable gain. Continuing...");
   }
-
+  if (!adc1.setRate(ADC1_SAMPLE_RATE)) {
+    logger::warn("ADC1 could not adjust conversion rate. Continuing...");
+  }
+  if (!adc1.calibrate(NAU7802_CALMOD_INTERNAL)) {
+    logger::warn("ADC1 could not perfrom internal calibration. Continuing...");
+  }
 }
 
 /* Add user sensor read functions here */
 void readADC0() {
   // constexpr uint32_t ADC1_MINIMUM_PERIOD_US = 1850;
 
-  int32_t frame[ADC0_FRAME_SIZE];
+  int32_t frame[ADC0_FRAME_SIZE] = { 0 };
   // use `esp_timer_get_time()` instead of `micros()` so that timing can last
   // longer than 1.2 hours
   uint64_t timeNow_us = esp_timer_get_time();
@@ -282,15 +309,16 @@ void readADC1() {
   constexpr uint64_t ADC1_MINIMUM_PERIOD_US = 3700;
   static uint64_t lastSample_us = 0;
 
-  int32_t frame[ADC1_FRAME_SIZE];
+  int32_t frame[ADC1_FRAME_SIZE] = { 0 };
+  // use `esp_timer_get_time()` instead of `micros()` so that timing can last
+  // longer than 1.2 hours
   uint64_t timeNow_us = esp_timer_get_time();
 
   // The NAU7802 takes a long time to transfer data over I2C. To improve data
-  // throughput, we wait the equiavlent of 2 ADC0 reads before reading ADC1.
-  if (timeNow_us < lastSample_us + ADC1_MINIMUM_PERIOD_US) {
+  // throughput, we wait 2 ADC0 cycle reads before reading ADC1.
+  if (timeNow_us - lastSample_us <= ADC1_MINIMUM_PERIOD_US) {
     return;
   }
-
   if (!adc1.available()) {
     return;
   }
@@ -361,10 +389,7 @@ void loop() {
   /* call your sensor read functions here */
 
   readADC0();
-  
-  if (!ADC1NotPresent) {
-    readADC1();
-  }
+  readADC1();
 
   logger::loopEnd(); // keep here
 }
@@ -805,13 +830,11 @@ bool logger::internal::drainFullBuffer(uint8_t bufferIndex) {
   
   portENTER_CRITICAL(&g_bufferMux);
   BufferState_t bufferState = g_bufferState[bufferIndex];
-
-  LOGGER_ASSERT(bufferState == BufferState_t::BUFFER_FULL,
-                "Buffer state not BUFFER_FULL after swap");
-
   g_bufferState[bufferIndex] = BufferState_t::BUFFER_DRAINING;
   portEXIT_CRITICAL(&g_bufferMux);
 
+  LOGGER_ASSERT(bufferState == BufferState_t::BUFFER_FULL,
+                "Buffer state not BUFFER_FULL after swap");
   LOGGER_ASSERT(g_bufferState[(bufferIndex+1)%2] != BufferState_t::BUFFER_DRAINING,
                 "Both buffers are draining at the same time");
 
