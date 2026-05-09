@@ -61,14 +61,14 @@
  * LOGGER INCLUDES (INTERNAL ONLY, DO NOT MODIFY)
  ******************************************************************************/
 
-#include <Arduino.h>
+#include "Arduino.h"
 
 #include <atomic>         // Logger internal -- additional concurrency support
 
-#include <esp_system.h>   // ESP32 restart and shutdown
-#include <esp_timer.h>    // ESP32 hardware timers
-#include <SPI.h>
-#include <SD.h>
+#include "esp_system.h"   // ESP32 restart and shutdown
+#include "esp_timer.h"    // ESP32 hardware timers
+#include "SPI.h"
+#include "SD.h"
 
 // Production code will use the ESP32-WROOM-32 DEVKITV1
 #if !defined(CONFIG_IDF_TARGET_ESP32)
@@ -82,9 +82,9 @@
 // Prevent ADS1256 library from initializing with the default SPI instance
 #define ADS1256_SPI_ALREADY_STARTED 1
 
-#include <Wire.h>
-#include <Adafruit_NAU7802.h>
-#include <ADS1256.h>
+#include "Wire.h"
+#include "Adafruit_NAU7802.h"
+#include "ADS1256.h"
 
 /*******************************************************************************
  * USER DEFINES
@@ -106,13 +106,13 @@
 
 #ifdef ENABLE_LOGGER_ASSERTS
   /* Invariant assertion checking. Enabled with `ENABLE_LOGGER_ASSERTS`. */
-  #define LOGGER_ASSERT(cond, msg)                                         \
+  #define LOGGER_ASSERT(cond)                                              \
     do {                                                                   \
       if (!(cond)) {                                                       \
-        char _assert_buf[256];                                             \
+        char _assert_buf[128];                                             \
         snprintf(_assert_buf, sizeof(_assert_buf),                         \
-                "ASSERT on [%s:%d]: \"%s\":\n\t%s",                        \
-                 __FILE__, __LINE__, (msg), #cond);                        \
+                 "ASSERTION failed on [%s:%d]: %s"                         \
+                 __FILE__, __LINE__, #cond);                               \
         faultHandler(_assert_buf);                                         \
       }                                                                    \
     } while (0)
@@ -125,7 +125,7 @@
 #else
   #define LOGGER_ASSERT(cond, msg)    do { } while (0)
   #define LOGGER_WARN_IF(cond, msg)   do { } while (0)
-#endif
+#endif // ENABLE_LOGGER_ASSERTS
 
 /*******************************************************************************
  * LOGGER PIN ASSIGNMENTS (INTERNAL ONLY, DO NOT MODIFY)
@@ -140,12 +140,11 @@ constexpr int8_t PIN_EXTLED1               = 13;
 // fault indicator
 constexpr int8_t PIN_EXTLED2               = 32;
 
-// VSPI bus
-constexpr int8_t PIN_ADC0_SPI_SCK          = 18;
-constexpr int8_t PIN_ADC0_SPI_MISO         = 19;
-constexpr int8_t PIN_ADC0_SPI_MOSI         = 23;
-constexpr int8_t PIN_ADC0_SPI_CS           = 4;
-constexpr int8_t PIN_ADC0_SPI_DRDY         = 34;
+// alt SPI bus (I messed up the pins for HSPI but it's fine)
+constexpr int8_t PIN_SD_SPI_SCK            = 33;
+constexpr int8_t PIN_SD_SPI_MISO           = 25;
+constexpr int8_t PIN_SD_SPI_MOSI           = 26;
+constexpr int8_t PIN_SD_SPI_CS             = 15;
 
 /*******************************************************************************
  * USER PIN ASSIGNMENTS
@@ -153,11 +152,12 @@ constexpr int8_t PIN_ADC0_SPI_DRDY         = 34;
 // Just remember this is on a perfboard, and all pins must be soldered with
 // wires to route to your intended ADC/sensor.
 
-// alt SPI bus (I messed up the pins for HSPI but it's fine)
-constexpr int8_t PIN_SD_SPI_SCK            = 33;
-constexpr int8_t PIN_SD_SPI_MISO           = 25;
-constexpr int8_t PIN_SD_SPI_MOSI           = 26;
-constexpr int8_t PIN_SD_SPI_CS             = 15;
+// VSPI bus
+constexpr int8_t PIN_ADC0_SPI_SCK          = 18;
+constexpr int8_t PIN_ADC0_SPI_MISO         = 19;
+constexpr int8_t PIN_ADC0_SPI_MOSI         = 23;
+constexpr int8_t PIN_ADC0_SPI_CS           = 4;
+constexpr int8_t PIN_ADC0_SPI_DRDY         = 34;
 
 // I2C bus
 constexpr int8_t PIN_ADC1_I2C_SDA          = 21;
@@ -215,7 +215,8 @@ namespace logger {
    * Use this function to signal the user of a minor problem.
    */
   void warn(const char* user_msg);
-}
+
+} // namespace logger
 
 /*******************************************************************************
  * USER CONFIGURATION
@@ -252,7 +253,7 @@ Adafruit_NAU7802 adc1;
 /* Add user sensor init functions here */
 
 void initADC0() {
-  // true measured voltage scale = VREF * 2 / PGA
+  // true measured voltage scale = (VREF * 2 / PGA) < 3.0 V
 
   constexpr uint8_t ADC0_SAMPLE_RATE = DRATE_30000SPS;
   constexpr uint8_t ADC0_GAIN = PGA_1;
@@ -286,6 +287,7 @@ void initADC1() {
   if (!adc1.calibrate(NAU7802_CALMOD_INTERNAL)) {
     logger::warn("ADC1 could not perfrom internal calibration. Continuing...");
   }
+  (void)adc1.setChannel(0); // CH1 is default in driver anyway
 }
 
 /* Add user sensor read functions here */
@@ -294,7 +296,7 @@ void readADC0() {
 
   int32_t frame[ADC0_FRAME_SIZE] = { 0 };
   // use `esp_timer_get_time()` instead of `micros()` so that timing can last
-  // longer than 1.2 hours
+  // longer than 1.2 hours.
   uint64_t timeNow_us = esp_timer_get_time();
 
   // Keep this loop as small as possible!
@@ -311,7 +313,7 @@ void readADC1() {
 
   int32_t frame[ADC1_FRAME_SIZE] = { 0 };
   // use `esp_timer_get_time()` instead of `micros()` so that timing can last
-  // longer than 1.2 hours
+  // longer than 1.2 hours.
   uint64_t timeNow_us = esp_timer_get_time();
 
   // The NAU7802 takes a long time to transfer data over I2C. To improve data
@@ -322,16 +324,7 @@ void readADC1() {
   if (!adc1.available()) {
     return;
   }
-  if (!adc1.setChannel(0)) {
-    return;
-  }
   frame[0] = adc1.read();
-
-  // Uncomment for Adafruit NAU7802 Rev. B
-  // if (!adc1.setChannel(1)) {
-  //   return;
-  // }
-  // frame[1] = adc1.read();
 
   (void)logger::pushRecord(timeNow_us, ADC1_DATA_ID, frame, sizeof(frame));
 
@@ -351,8 +344,8 @@ bool testADC0() {
   adc0.setMUX(SING_0);
   for (int i = 0; i < 10; i++) {
     int32_t conversion = adc0.readSingle();
-    if ( (conversion == static_cast<int32_t>(0x00000000L))
-      || (conversion == static_cast<int32_t>(0xFFFFFFFFL)) ) {
+    if ((conversion == static_cast<int32_t>(0x00000000L)) ||
+        (conversion == static_cast<int32_t>(0xFFFFFFFFL)) ) {
       
       badTransmissionCount++;
     }
@@ -404,7 +397,7 @@ void loop() {
 /**
  * # HELPFUL RESOURCES
  * 
- * SD SPI Host Driver documebtation
+ * SD SPI Host Driver documentation
  * https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/sdspi_host.html 
  *
  * arduino-esp32 SD source code
@@ -431,8 +424,7 @@ constexpr size_t LOG_WRITE_THRESHOLD       = 4096; // this is in bytes!
 
 constexpr uint8_t MAX_ROTATION_SKIPS       = 10; // arbitrary right now
 
-static_assert(LOG_WRITE_THRESHOLD <= LOG_BUFFER_SIZE,
-              "LOG_WRITE_THRESHOLD must be <= LOG_BUFFER_SIZE");
+static_assert(LOG_WRITE_THRESHOLD <= LOG_BUFFER_SIZE);
 
 constexpr uint64_t SIZE_GIGABYTES = 1024 * 1024 * 1024;
 constexpr uint64_t MIN_FREE_BYTES = 1 * SIZE_GIGABYTES;
@@ -498,17 +490,11 @@ File metadataFile;
 
 // buffer spinlock
 portMUX_TYPE g_bufferMux = portMUX_INITIALIZER_UNLOCKED;
-
-// indirectly shared variables
 uint8_t g_fillIndex;
 BufferState_t g_bufferState[2];
 LogBuffer g_buffers[2];
 
-// fault spinlock
-portMUX_TYPE g_faultMux = portMUX_INITIALIZER_UNLOCKED;
-// Directly accessed shared variables
 std::atomic<bool> g_faulted(false);
-
 
 TaskHandle_t g_sensorTaskHandle = nullptr;
 TaskHandle_t g_sdCardHandle = nullptr;
@@ -564,7 +550,6 @@ void logger::setupBegin() {
 
   g_sensorTaskHandle = xTaskGetCurrentTaskHandle();
 
-  // define initial buffer state
   g_fillIndex = 0;
   g_buffers[0].used = 0;
   g_buffers[1].used = 0;
@@ -574,9 +559,10 @@ void logger::setupBegin() {
   // Serial must be initialized as early as possible
   serial0.begin(SERIAL_BAUD_RATE);
 
-  LOGGER_ASSERT(xPortGetCoreID() == SENSOR_TASK_CORE,
-                "Arduino loopTask is not using core 1");
+  LOGGER_ASSERT(xPortGetCoreID() == SENSOR_TASK_CORE);
 }
+
+
 
 void logger::setupEnd() {
   using namespace internal;
@@ -586,8 +572,7 @@ void logger::setupEnd() {
     faultHandler("IPC Queue initialization failed");
   }
 
-  LOGGER_ASSERT(xPortGetCoreID() != SD_CARD_TASK_CORE,
-                "sdWriterTask will be assigned to same core as loopTask");
+  LOGGER_ASSERT(xPortGetCoreID() != SD_CARD_TASK_CORE);
 
   BaseType_t xReturned = xTaskCreatePinnedToCore(
     sdWriterTask,
@@ -602,6 +587,7 @@ void logger::setupEnd() {
     faultHandler("Failed to create Core 0 task");
   }
 }
+
 
 void logger::loopBegin() {
   using namespace internal;
@@ -618,6 +604,7 @@ void logger::loopBegin() {
   faultGuard();
 }
 
+
 void logger::loopEnd() {
   using namespace internal;
 
@@ -625,6 +612,7 @@ void logger::loopEnd() {
     activeBufferFull = !rotateActiveBuffer();
   }
 }
+
 
 bool logger::pushRecord(uint64_t time_us, uint8_t id, const int32_t* frame,
                         size_t len) {
@@ -637,12 +625,9 @@ bool logger::pushRecord(uint64_t time_us, uint8_t id, const int32_t* frame,
   const BufferState_t fillState = g_bufferState[currentFillIndex];
   portEXIT_CRITICAL(&g_bufferMux);
 
-  LOGGER_ASSERT(currentFillIndex == 0 || currentFillIndex == 1,
-                "Core 0 received invalid buffer index");
-  LOGGER_ASSERT(fillState == BufferState_t::BUFFER_FILLING,
-                "Current filling buffer is not in valid state");
+  LOGGER_ASSERT(currentFillIndex == 0 || currentFillIndex == 1);
+  LOGGER_ASSERT(fillState == BufferState_t::BUFFER_FILLING);
 
-  // Prepare to rotate buffer if this write fills the buffer past threshold
   LogBuffer* buf = &g_buffers[currentFillIndex];
   activeBufferFull = (buf->used + recordSize >= LOG_WRITE_THRESHOLD);
   if (buf->used + recordSize > LOG_BUFFER_SIZE) {
@@ -658,19 +643,18 @@ bool logger::pushRecord(uint64_t time_us, uint8_t id, const int32_t* frame,
     buf->data[buf->used++] = byteFrame[i];
   }
 
-  LOGGER_ASSERT(buf->used <= LOG_BUFFER_SIZE, "Buffer exceeded max size");
+  LOGGER_ASSERT(buf->used <= LOG_BUFFER_SIZE);
   return true;
 }
+
 
 [[noreturn]] void logger::faultHandler(const char* user_msg) {
   using namespace internal;
 
-  LOGGER_ASSERT(user_msg != nullptr, "Fault message was a null pointer");
+  LOGGER_ASSERT(user_msg != nullptr);
 
-  portENTER_CRITICAL(&g_faultMux);
   bool first = !g_faulted;
   g_faulted = true;
-  portEXIT_CRITICAL(&g_faultMux);
   
   // TODO: is there something better to do when we hit a fault?
 
@@ -695,18 +679,21 @@ bool logger::pushRecord(uint64_t time_us, uint8_t id, const int32_t* frame,
   while (true) {} // should never reach here
 }
 
+
 void logger::warn(const char* user_msg) {
   using namespace internal;
 
-  LOGGER_ASSERT(user_msg != nullptr, "Warning message was a null pointer");
+  LOGGER_ASSERT(user_msg != nullptr);
   (void)serial0.print("WARN: ");
   (void)serial0.println(user_msg);
   serial0.flush();
 }
 
+
 /*******************************************************************************
  * SD WRITER TASK DEFINITION
  ******************************************************************************/
+
 
 void logger::internal::sdWriterTask(void* pvParameters) {
 
@@ -730,8 +717,7 @@ void logger::internal::sdWriterTask(void* pvParameters) {
   // Signal to Core1 that initialization is complete
   BaseType_t xReturned = xTaskNotifyGive(g_sensorTaskHandle);
 
-  LOGGER_ASSERT(xReturned == pdPASS,
-                "xTaskNotifyGive did not return expected value");
+  LOGGER_ASSERT(xReturned == pdPASS);
 
   /* TASK LOOP */
   while (true) {
@@ -739,17 +725,14 @@ void logger::internal::sdWriterTask(void* pvParameters) {
 
     faultGuard();
 
-    // other LED indicators go here (SD card activity, errors, etc)
     blink();
 
     // block until buffer is filled by core1 and handed to core0
     if (xQueueReceive(g_fullBufferQueue, &bufferIndex, portMAX_DELAY)
         == pdTRUE) {
           
-      LOGGER_ASSERT(g_fullBufferQueue != NULL,
-                    "IPC message queue became NULL");
-      LOGGER_ASSERT(bufferIndex == 0 || bufferIndex == 1,
-                    "Core 0 received invalid buffer index");
+      LOGGER_ASSERT(g_fullBufferQueue != NULL);
+      LOGGER_ASSERT(bufferIndex == 0 || bufferIndex == 1);
 
       // drainFullBuffer handles errors internally
       (void)drainFullBuffer(bufferIndex);
@@ -759,9 +742,11 @@ void logger::internal::sdWriterTask(void* pvParameters) {
   }
 }
 
+
 /*******************************************************************************
  * INITIALIZATION FUNCTIONS 
  ******************************************************************************/
+
 
 bool logger::internal::initGPIO() {
   /* Initialize GPIO pins */
@@ -778,14 +763,17 @@ bool logger::internal::initGPIO() {
   return true;
 }
 
+
 bool logger::internal::initSPI() {
   sdSpi.begin(PIN_SD_SPI_SCK, PIN_SD_SPI_MISO, PIN_SD_SPI_MOSI);
   return true;
 }
 
+
 bool logger::internal::initSDCard() {
   return sd.begin(PIN_SD_SPI_CS, sdSpi);
 }
+
 
 bool logger::internal::initSDFiles() {
   if (sd.totalBytes() - sd.usedBytes() < MIN_FREE_BYTES) {
@@ -807,8 +795,7 @@ bool logger::internal::initSDFiles() {
     filename = "/" + filename;
   }
 
-  LOGGER_ASSERT(!sd.exists(filename),
-                "Attempting to create a file that already exists");
+  LOGGER_ASSERT(!sd.exists(filename));
 
   logFile = sd.open(filename, FILE_WRITE, true);
   if (!logFile) {
@@ -822,9 +809,11 @@ bool logger::internal::initSDFiles() {
   #endif
 }
 
+
 /*******************************************************************************
  * CORE 0 FUNCTION DEFINITIONS
  ******************************************************************************/
+
 
 bool logger::internal::drainFullBuffer(uint8_t bufferIndex) {
   
@@ -833,14 +822,12 @@ bool logger::internal::drainFullBuffer(uint8_t bufferIndex) {
   g_bufferState[bufferIndex] = BufferState_t::BUFFER_DRAINING;
   portEXIT_CRITICAL(&g_bufferMux);
 
-  LOGGER_ASSERT(bufferState == BufferState_t::BUFFER_FULL,
-                "Buffer state not BUFFER_FULL after swap");
-  LOGGER_ASSERT(g_bufferState[(bufferIndex+1)%2] != BufferState_t::BUFFER_DRAINING,
-                "Both buffers are draining at the same time");
+  LOGGER_ASSERT(bufferState == BufferState_t::BUFFER_FULL);
+  LOGGER_ASSERT(g_bufferState[(bufferIndex+1)%2] != BufferState_t::BUFFER_DRAINING);
 
   LogBuffer* buf = &g_buffers[bufferIndex];
 
-  LOGGER_ASSERT(buf->used <= LOG_BUFFER_SIZE, "Buffer exceeded max size");
+  LOGGER_ASSERT(buf->used <= LOG_BUFFER_SIZE);
   LOGGER_WARN_IF(buf->used == 0, "Core 0 Received empty buffer");
   
   if (!writeBuffer(buf->data, buf->used)) {
@@ -857,9 +844,10 @@ bool logger::internal::drainFullBuffer(uint8_t bufferIndex) {
   return true;
 }
 
+
 bool logger::internal::writeBuffer(const uint8_t* buffer, size_t len) {
-  LOGGER_ASSERT(buffer != nullptr, "Passed buffer is a null pointer");
-  LOGGER_ASSERT(len <= LOG_BUFFER_SIZE, "Passed buf length exceeds max size");
+  LOGGER_ASSERT(buffer != nullptr);
+  LOGGER_ASSERT(len <= LOG_BUFFER_SIZE);
 
   digitalWrite(PIN_EXTLED2, HIGH);
   size_t written = logFile.write(buffer, len);
@@ -879,14 +867,17 @@ bool logger::internal::writeBuffer(const uint8_t* buffer, size_t len) {
   return true;
 }
 
+
 bool logger::internal::writeMetadata() {
   // TODO: develop metadata format
   return true;
 }
 
+
 /*******************************************************************************
  * CORE 1 FUNCTION DEFINITIONS
  ******************************************************************************/
+
 
 bool logger::internal::rotateActiveBuffer() {
   static uint8_t rotationSkips = 0;
@@ -906,8 +897,7 @@ bool logger::internal::rotateActiveBuffer() {
   }
   rotationSkips = 0;
 
-  LOGGER_ASSERT(g_bufferState[fullIndex] == BufferState_t::BUFFER_FILLING,
-                "Current filling buffer is not in valid state");
+  LOGGER_ASSERT(g_bufferState[fullIndex] == BufferState_t::BUFFER_FILLING);
 
   // rotate buffers
   g_bufferState[fullIndex] = BufferState_t::BUFFER_FULL;
@@ -923,9 +913,11 @@ bool logger::internal::rotateActiveBuffer() {
   return true;
 }
 
+
 /*******************************************************************************
  * HELPER FUNCTION DEFINITIONS
  ******************************************************************************/
+
 
 void logger::internal::blink() {
   static uint32_t lastLedOn = 0;
@@ -947,29 +939,26 @@ void logger::internal::blink() {
   }
 }
 
+
 uint64_t logger::internal::makeHeader(uint64_t time_us, uint8_t type,
                                       uint8_t length) {
   uint64_t header = (time_us & 0x0000FFFFFFFFFFFFULL)
                   | (static_cast<uint64_t>(type) << 48)
                   | (static_cast<uint64_t>(length) << 56);
-  // Header size guaranteed by function return type. 
-  //LOGGER_ASSERT(sizeof(header) == RECORD_HEADER_SIZE,
-  //              "Constructed header does not match specified header size");
+
   return header;
 }
 
 void logger::internal::faultGuard() {
-  portENTER_CRITICAL(&g_faultMux);
   if (g_faulted) {
-    portEXIT_CRITICAL(&g_faultMux);
     for (;;) {
       _NOP();
       vTaskDelay(pdMS_TO_TICKS(100));
     }
     // no return
   }
-  portEXIT_CRITICAL(&g_faultMux);
 }
+
 
 int32_t logger::internal::greatestFileIndex(const char* fNameStart,
                                             const char* fNameEnd,

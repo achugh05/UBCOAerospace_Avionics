@@ -76,8 +76,8 @@ ADC1_TYPE_ID = 2
 
 DEFAULT_PROCESSING_CONFIG = ProcessingConfig()
 PROCESSING_CONFIG_BY_TYPE: dict[int, ProcessingConfig] = {
-    ADC0_TYPE_ID: ProcessingConfig(code_bits=24, full_scale_mv=5000.0, pga=1.0),
-    ADC1_TYPE_ID: ProcessingConfig(code_bits=24, full_scale_mv=3000.0, pga=64.0)
+    ADC0_TYPE_ID: ProcessingConfig(24, 5000.0, 1.0),
+    ADC1_TYPE_ID: ProcessingConfig(24, 3000.0, 64.0)
 }
 
 
@@ -194,7 +194,8 @@ def process_record_values(record: Record) -> list[float]:
     Edit this function to add your own record-type-specific conversion, sensor
     calibration, filtering, scaling, unit conversions, or derived channels.
     """
-    cfg = PROCESSING_CONFIG_BY_TYPE.get(record.record_type, DEFAULT_PROCESSING_CONFIG)
+    cfg = PROCESSING_CONFIG_BY_TYPE.get(record.record_type,
+                                        DEFAULT_PROCESSING_CONFIG)
 
     # If record type is not recognized, use raw values
     if cfg is DEFAULT_PROCESSING_CONFIG:
