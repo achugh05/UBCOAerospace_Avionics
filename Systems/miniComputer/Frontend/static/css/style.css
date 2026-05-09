@@ -1,0 +1,187 @@
+        /* custom font */
+@font-face {
+    font-family: myFont; /* set name */
+    src: url("ShareTechMono-Regular.ttf"); /* url of the font */
+}
+
+:root {
+    /* --- EVA PALETTE --- */
+    --bg-core: #000000;        /* Deepest Black */
+    --bg-panel: #000000;       /* Panel Background */
+    
+    /* The High Contrast Neons */
+    --eva-orange: #ec6a00;     /* Main Text / Borders (The "Nerv" Orange) */
+    --eva-green: #30fc85;      /* Success / Open Valves */
+    --eva-yellow: #fbff00;  
+    --eva-red: #fd1530cf;        /* Danger / Closed Valves */
+    --eva-dark-red: #280000;   /* Background for critical errors */
+    
+    /* UI Elements */
+    --grid-line: #3B3A32;      /* Subtle grid lines */
+    --text-dim: #505050;       /* Labels */
+    
+    /* Effects */
+    --glow-orange: 0 0 5px rgba(218, 102, 6, 0.5);
+    --glow-green: 0 0 5px rgba(112, 255, 183, 0.995);   
+}
+
+body {
+    background-color: var(--bg-core);
+    color: var(--eva-orange);
+    font-family: myFont, monospace; 
+    margin: 0;
+    padding: 10px;
+    height: 100vh;
+    box-sizing: border-box;
+    overflow: hidden; /* Stop the whole page from scrolling */
+}
+
+/* --- LAYOUT GRID --- */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr; 
+    gap: 10px;
+    height: 98vh;
+}
+
+.right-column {
+    display: grid;
+    grid-template-rows: 1fr 1fr; /* Split right side 50/50 */
+    gap: 15px;
+}
+
+/* --- THE EVA PANEL STYLE --- */
+.panel {
+    background: var(--bg-panel);
+    border: 3px solid var(--eva-orange);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--glow-orange); /* Subtle glow */
+}
+
+.panel-header {
+    background: var(--bg-panel);
+    border-bottom: 3px solid var(--eva-orange);
+    color: var(--eva-red);   
+    font-weight: bold;
+    padding: 5px 7px 2px;
+    font-size: 20px;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 4px;
+}
+
+/* GSE MAP AREA */
+.gse-viewport {
+    flex-grow: 1;
+    display: flex;
+    position: relative; 
+    overflow: hidden;   /* Keeps image from spilling out */
+    justify-content: center;
+    align-items: center;
+    border-top: 1px dashed var(--grid-line);
+    background-image: 
+        linear-gradient(var(--grid-line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 50px 50px; /* Technical Grid Background */
+}
+
+/* 2. The Floating Legend */
+.gse-legend {
+    position: absolute; /* Frees it from normal layout flow */
+    top: 15px;       /* 15px from the bottom edge */
+    left: 15px;        /* 15px from the right edge */
+    
+    /* Styling to match the Eva Theme */
+    background-color: rgba(0, 0, 0, 0.85); /* Semi-transparent black */
+    border: 1px solid var(--eva-orange);
+    padding: 10px;
+    z-index: 10; /* Ensures it sits ON TOP of the image */
+    
+    /* Optional: Cut corner effect */
+    border-bottom-right-radius: 0px; 
+}
+
+/* 3. Legend Content Styling */
+.legend-title {
+    font-size: 14px;
+    border-bottom: 1px solid var(--grid-line);
+    margin-bottom: 5px;
+    color: var(--eva-green);
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    margin-top: 4px;
+    color: var(--eva-orange);
+}
+
+/* The colored dots */
+.dot {
+    width: 8px;
+    height: 8px;
+    display: inline-block;
+    margin-right: 8px;
+    background-color: gray;
+}
+.dot.open { background-color: var(--eva-green); box-shadow: 0 0 5px var(--eva-green); }
+.dot.closed { background-color: var(--eva-red); box-shadow: 0 0 5px var(--eva-red); }
+.dot.error { background-color: var(--eva-yellow); box-shadow: 0 0 5px var(--eva-yellow); }
+
+/* CAMERAS */
+.cam-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 5px;
+    flex-grow: 1;
+    padding: 5px;
+}
+
+.cam-feed {
+    background: #000;
+    border: 1px solid var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--eva-green);
+    font-size: 10px;
+}
+
+/* DATA TABLE */
+.data-table {
+    padding: 4px 7px;
+    overflow-y: auto; /* Scroll if too much data */
+}
+
+.data-row {
+    display: flex;
+    border-bottom: 1px dotted var(--grid-line);
+    padding: 5px 0;
+    font-size: 1.4rem;
+}
+
+.label { color: var(--eva-green); font-size: 0.9rem; flex: 1; text-align: left;}
+.value { color: var(--eva-orange); font-weight: bold; text-shadow: var(--glow-orange);}
+.unit { color: var(--eva-green); font-size: 0.8rem; font-weight: bold; text-shadow: var(--glow-orange); flex: 1; text-align: right;}
+
+/* --- VALVE STATUS INDICATORS --- */
+.valve-indicator {
+    padding: 5px 10px;
+    border: 1px solid;
+    font-weight: bold;
+}
+.valve-indicator.open {
+    color: var(--eva-green);
+    border-color: var(--eva-green);
+    box-shadow: 0 0 5px var(--eva-green);
+}
+.valve-indicator.closed {
+    color: var(--eva-red);
+    border-color: var(--eva-red);
+    box-shadow: 0 0 5px var(--eva-red);
+}
+       
