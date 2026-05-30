@@ -1,14 +1,4 @@
 /* There appear to be no issues if a servo is at position "255 255". Encoder can track direction, although we cannot yet send controls for angles "below" zero.
-
-Rev P1 - Board: Mega 2560. Mega + Heltec UART LoRa, 2-byte servo degree commands, full TX/RX logging to SD
-Rev P2 - Added support for communication with LoRa, executing commands, logging initial errors. Servo code kept simple.
-Rev P3 - Sequence removed. Added dest_id check. Add datalogging error control
-Rev P4 - Added VERSION var. Fixed loraSerial to uses RX/TX_ARDUINO pins.
-Rev P5 - checkPacketValidity doesn't need to check DEVICE_ID
-- corrected CRC8 compute in sendError()
-- removed duplicate prints, relies on logPacket() now
-- updated command 9, deleted 10 and 11 (see AV-104)
-- command ack addressed to mega_football, not lora
 Rev P6 - Added support for pressure load cells, logs for five seconds after ignition
 Rev P7 - fixed valve light update functions
 - removed unused transmission errors
@@ -86,24 +76,26 @@ uint8_t computeCRC8(uint8_t* data, int length) {
 
 // ================== LOGGING =============================
 // common - used to give an explanation for events in the log
-void logEvent(const char* message) {
+// common - used to give an explanation for events in the log
+void logEvent(String message) {
   if (dataFile) {
     dataFile.print(millis());
     dataFile.print(",");
     dataFile.println(message);
   }
-  //Serial.println(message);    //for debugging only
+  Serial.println(message);    //for debugging only
 }
 
 // common - prints packets to Serial monitor for use in debugging. 
-// void printPacket(uint8_t* packet, int telemetryLength) {
-//   for (int i=0; i<telemetryLength; i++) {
-//     Serial.print(packet[i]);
-//     Serial.print(" ");
-//   }
-//   Serial.println();
-// }
+void printPacket(uint8_t* packet, int telemetryLength) {
+  for (int i=0; i<telemetryLength; i++) {
+    Serial.print(packet[i]);
+    Serial.print(" ");
+  }
+  Serial.println();
+}
 
+// common - logs packets to SD card
 void logPacket(uint8_t* packet, int length) {
   if (dataFile) {
     dataFile.print(millis());
@@ -119,7 +111,7 @@ void logPacket(uint8_t* packet, int length) {
     }
   }
   
-  // printPacket(packet, length);  //used for serial debugging
+  printPacket(packet, length);  //used for serial debugging
 }
 
 //---------------INITIALIZING------------------------------
@@ -240,8 +232,8 @@ public:
 };
 
 RexServo servos[NUM_SERVOS] = {
-  RexServo(26, 27, 8, 7),     // encoder A, B, PWM A, B
-  RexServo(28, 29, 6, 5),
+  RexServo(26, 27, 6, 5),     // encoder A, B, PWM A, B
+  RexServo(28, 29, 8, 7),
   RexServo(30, 31, 10, 9)
 };
 
@@ -434,7 +426,7 @@ void sendError(int errorCommand) {
 
 // ---------------- SETUP ----------------
 void setup() {
-  // Serial.begin(115200);    // used to start Serial output for debugging
+  Serial.begin(115200);    // used to start Serial output for debugging
   loraSerial.begin(115200);   // begins the UART channel to communicate with the Lora
 
   deviceConfig();             // determines if device is manifold 1 or 2

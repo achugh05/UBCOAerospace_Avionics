@@ -1,17 +1,9 @@
 /*
-Rev P1 - Board: Mega 2560. deciphers telemetry and displays to TM1637 displays. control panel not complete yet
-Rev P2 - Added compatibility with capstone. Added ability to make commands
-- added control panel, capstone commands
-- fixed rx-tx communication
-- general fixes
-Rev P3 - using commandLength seems wrong. should be a function of payload length
-- fixed display and functioning of control panel, added servo turn commands
-- datalogging error is displayed on error panel, not sent
-Rev P4 - SD_CS corrected, updated display pins
-- added ignition code, error lights
-Rev P5 - added comments, updated print statements
-- commands can send with variable length
-- separated error panel, ignition panel functions
+Added self test function
+  To activate, hold error reset button for 500ms during power on.
+  Turns pressure displays to 4444, cycles through arm switch lights, commands each servo to open and close.
+Updated pinout
+Updated ignition arm light logic (no longer change detecting, just current state)
 */
 
 const uint8_t ignitionCode = 27;
@@ -32,26 +24,26 @@ const uint8_t ignitionCode = 27;
 #define NUM_PIXELS   4
 #define NUM_SWITCHES 8
 #define NUM_STRIPS   2
-#define LED_PIN1 38
-#define LED_PIN2 39
-#define IGNITION_LED_PIN 42
-#define ERROR_LED_PIN 41
-#define ERROR_BUTTON_PIN 40
-#define IGNITION_PIN 43
-#define IGNITION_ARM_PIN 44
+#define LED_PIN0 43
+#define LED_PIN1 42
+#define IGNITION_LED_PIN 44
+#define ERROR_LED_PIN 45
+#define ERROR_BUTTON_PIN0 47
+#define IGNITION_PIN 4
+#define IGNITION_ARM_PIN 6
 #define NUM_IGNITION_PIXELS 2
 #define NUM_ERROR_PIXELS 3
 
-const int switchPins[NUM_SWITCHES] = {37,35,33,31,29,27,25,23};
+const int switchPins[NUM_SWITCHES] = {25, 24, 27, 26, 29, 28, 31, 30};
 Adafruit_NeoPixel leds[NUM_STRIPS] = {
-  Adafruit_NeoPixel(NUM_PIXELS, LED_PIN1, NEO_GRB + NEO_KHZ800),
-  Adafruit_NeoPixel(NUM_PIXELS, LED_PIN2, NEO_GRB + NEO_KHZ800)
+  Adafruit_NeoPixel(NUM_PIXELS, LED_PIN0, NEO_GRB + NEO_KHZ800),
+  Adafruit_NeoPixel(NUM_PIXELS, LED_PIN1, NEO_GRB + NEO_KHZ800)
 };
 bool currentLedState[NUM_SWITCHES] = {false};
 bool lastLedState[NUM_SWITCHES] = {false};
 
-Adafruit_NeoPixel errorLEDs = Adafruit_NeoPixel(NUM_IGNITION_PIXELS, IGNITION_LED_PIN, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel ignitionLEDs = Adafruit_NeoPixel(NUM_ERROR_PIXELS, ERROR_LED_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel errorLEDs = Adafruit_NeoPixel(NUM_ERROR_PIXELS, ERROR_LED_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel ignitionLEDs = Adafruit_NeoPixel(NUM_IGNITION_PIXELS, IGNITION_LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // SD PINS (MEGA default SPI)
 #define SD_CS 53
@@ -62,14 +54,15 @@ HardwareSerial& loraSerial = Serial1;     //RX1 (19), TX1 (18)
 uint8_t LORA_STATION = 0;
 uint8_t MANIFOLD1 = 1;
 uint8_t MANIFOLD2 = 2;
-uint8_t LORA_FOOTBALL = 3;
 
 unsigned long lastLoggedEvent = 0;
 unsigned long lastReceivedPacketTime;
 const int connectivityTimeout = 3500;
 bool connectivityError = false;
 const int commandLength = 10;   //max command length (3 bytes of payload)
-unsigned long lastCheckControlPanel = 0;
+unsigned long lastCheck = 0;
+int maxAcceptableDelay = 5000;                // self test - max time to wait for a command before flagging an error
+
 
 // arrays for states
 uint16_t valvePositions[NUM_SERVOS];
@@ -93,13 +86,13 @@ unsigned long lastErrorButtonTime = 0;
 unsigned long lastIgnitionArmState = 0;       // for ignition arming
 
 // pressure displays setup
-const int displayDIOs[] = {22, 24, 26, 28};
-#define displayCLK 30
+const int displayDIOs[] = {10, 11, 9, 12};
+#define displayCLK 13
 TM1637Display display0(displayCLK, displayDIOs[0]);
 TM1637Display display1(displayCLK, displayDIOs[1]);
 TM1637Display display2(displayCLK, displayDIOs[2]);
-TM1637Display display3(displayCLK, displayDIOs[3]);   //currently only required as a provision, and so can be used for other things
-TM1637Display displays[3] = {display0, display1, display2};
+TM1637Display display3(displayCLK, displayDIOs[3]);   //currently only required as a provision, and so is used for other things
+TM1637Display displays[4] = {display0, display1, display2, display3};
 
 
 // common - computes the CRC8 byte for a given array
@@ -120,13 +113,13 @@ uint8_t computeCRC8(uint8_t* data, int length) {
 
 // ================== LOGGING =============================
 // common - used to give an explanation for events in the log
-void logEvent(const char* message) {
+void logEvent(String message) {
   if (dataFile) {
     dataFile.print(millis());
     dataFile.print(",");
     dataFile.println(message);
   }
-  //Serial.println(message);    //for debugging only
+  Serial.println(message);    //for debugging only
 }
 
 // common - prints packets to Serial monitor for use in debugging. 
@@ -138,6 +131,8 @@ void printPacket(uint8_t* packet, int telemetryLength) {
   Serial.println();
 }
 
+// uncommon - logs packets to SD card
+// also writes to mini PC for parsing
 void logPacket(uint8_t* packet, int length) {
   Serial.write(packet, length);   // for parsing by the mini PC
   if (dataFile) {
@@ -186,11 +181,11 @@ void initializeDatalogging() {
 // initializes pressure displays with a value of 9999
 void initializeDisplays() {
   for (int i=0; i<NUM_PRESSURES; i++) {
-    displays[i].setBrightness(0x0f);
+    displays[i].setBrightness(3);   // scale of 1-7 (7 highest)
     displays[i].showNumberDec(9999, true);    // must use true to display
   }
 
-  display3.setBrightness(0x0f);   //comment out if this display isn't to be active
+  display3.setBrightness(3);   // provisional display. Used in some error code display behaviour
   display3.showNumberDec(0, true);
 }
 
@@ -219,10 +214,18 @@ void initializeIgnitionPanel() {
 
 // initialize ignition button, error leds clear
 void initializeErrorPanel() {
-  pinMode(ERROR_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(ERROR_BUTTON_PIN0, INPUT_PULLUP);
   errorLEDs.begin();
   errorLEDs.clear();
   errorLEDs.show();
+
+  // if error button is held down during power up, starts a self test
+  // by only enabling the selfTest() function to be called during powerup, it cannot be accidentally run during normal operation
+  if (digitalRead(ERROR_BUTTON_PIN0) == LOW) {     // check if a self test should be run
+    delay(500);
+    if (digitalRead(ERROR_BUTTON_PIN0) == LOW)   // ensure it wasn't an accident
+      selfTest();     // execute self test
+  }
 }
 
 // ---------------- PACKET VALIDATION ----------------
@@ -267,7 +270,7 @@ void checkControlPanel() {
       lastLedState[i] = currentLedState[i];
       if (currentLedState[i-1]) {    //if armed, send command to move valve
         uint8_t payload[3] = {i/2, 0, currentLedState[i] ? 90 : 0} ;   //servo, angle (open or closed) in two bytes
-        sendCommandPacket(1, 9, payload);    //manifold, command (move servo), payload
+        sendCommandPacket(MANIFOLD1, 9, payload);    //manifold, command (move servo), payload
       }
     }
   }
@@ -275,14 +278,11 @@ void checkControlPanel() {
 
 // check ignition arm state, ignition button state. Sends the ignition command.
 void checkIgnitionPanel() {
-  uint8_t currentArmState = digitalRead(IGNITION_ARM_PIN);    // read arm switch state
-  if (currentArmState!= lastIgnitionArmState) {               // check if arm state has changed
-    lastIgnitionArmState = currentArmState;                   // update arm status
-    if (currentArmState == LOW) {                            // if armed, turn red
-      ignitionLEDs.setPixelColor(0, ignitionLEDs.Color(255, 0, 0));   // red for armed
-    } else {                                                  // if de-armed, turn off light
-      ignitionLEDs.setPixelColor(1, ignitionLEDs.Color(0, 0, 0));   // off
-    }
+  // update arm status
+  if (digitalRead(IGNITION_ARM_PIN) == LOW) {                            // if armed, turn red
+    ignitionLEDs.setPixelColor(0, 255, 0, 0);   // red for armed
+  } else {                                                  // if de-armed, turn off light
+    ignitionLEDs.setPixelColor(0, 0, 0, 0);   // off
   }
 
   uint8_t current = digitalRead(IGNITION_PIN);    // read pin to determine if pressed
@@ -291,19 +291,18 @@ void checkIgnitionPanel() {
     lastIgnitionButtonState = current;      // store new state
 
     if (current == LOW) {                  // pressed
-      sendCommandPacket(0, 4, &ignitionCode);    // send ignition command with ADDRESS of ignition code
-      ignitionLEDs.setPixelColor(1, ignitionLEDs.Color(255, 0, 0));   // red
-    } else {
-      ignitionLEDs.setPixelColor(1, ignitionLEDs.Color(0, 0, 0));     // off
+      sendCommandPacket(LORA_STATION, 4, &ignitionCode);    // send ignition command with ADDRESS of ignition code
+      ignitionLEDs.setPixelColor(1, 255, 0, 0);   // ignition LED will be red until power off
     }
   }
 
   ignitionLEDs.show();                                        // show updates to the lights
 }
 
-// checks the error reset button and updates lights
+// checks the error panel and updates the lights. One button/three lights
+// One button is used as error reset
 void checkErrorPanel() {
-  uint8_t current = digitalRead(ERROR_BUTTON_PIN);    // read error button pin to determine if pressed
+  uint8_t current = digitalRead(ERROR_BUTTON_PIN0);    // read error button pin to determine if pressed
 
   if (current != lastErrorButtonState && (millis() - lastErrorButtonTime > DEBOUNCE_MS)) {    // debounce button
     lastErrorButtonTime = millis();      // update last time button was pressed
@@ -352,7 +351,7 @@ void updateValveLights(uint16_t* degrees) {
 // ---------------- RECEIVE ----------------
 // handles any commands given over UART from the Lora
 void handleLoraInput() {
-  static uint8_t buffer[64];
+  static uint8_t buffer[32];    // can test with 64, and just change the index reset as well
   static int index = 0;
 
   while (loraSerial.available()) {
@@ -368,6 +367,7 @@ void handleLoraInput() {
     if (index >= 2 && byte == FOOTER) {
 
       if (checkPacketValidity(buffer, index)) {
+        connectivityError = false;    // reset every time a valid packet received
         handleLoraPacket(buffer, index);
       } else {
         logEvent("LoRa Packet Invalid");
@@ -376,7 +376,7 @@ void handleLoraInput() {
       index = 0;  // reset for next packet
     }
 
-    if (index >= 64) {
+    if (index >= 31) {
       index = 0;  // overflow protection
     }
   }
@@ -413,7 +413,7 @@ void handleLoraPacket(uint8_t* packet, int length) {
         logEvent("Ack. received. SD Card successfull.");
       } else if (packet[5] == 207 && packet[6] == 2) {
         logEvent("Ack. received. SD Card failed.");
-        errorLEDs.setPixelColor(4, errorLEDs.Color(255, 0, 0));    //red
+        errorLEDs.setPixelColor(3, errorLEDs.Color(255, 0, 0));    //red
         display3.showNumberDec(packet[3]*1000 + 207);   //source_id + error code
       }
       break;
@@ -432,14 +432,15 @@ void handleLoraPacket(uint8_t* packet, int length) {
       break;
 
     case 207:   //sd card query   //can't currently be sent to this device but code is here
-      if (packet[5] == 2)
+      if (packet[5] == 2) {
         display3.showNumberDec(packet[3]*1000 + 208);   //source_id + error code
-        errorLEDs.setPixelColor(4, errorLEDs.Color(255, 0, 0));   //red
+        errorLEDs.setPixelColor(3, errorLEDs.Color(255, 0, 0));   //red
+      }
       break;
 
     case 208:
       display3.showNumberDec(packet[3]*1000 + 208);   //source_id + error code
-      errorLEDs.setPixelColor(4, errorLEDs.Color(255, 0, 0));   //red
+      errorLEDs.setPixelColor(3, errorLEDs.Color(255, 0, 0));   //red
       break;
 
     case 250:
@@ -506,12 +507,144 @@ void sendCommandPacket(uint8_t destination, uint8_t command, uint8_t* payload) {
 }
 
 
+// ---------------- SELF TEST FUNCTIONS ----------------
+// prep: ensure all control switches are OFF and
+// ensure Station is powered on and servos are in or near a closed position
+/* SELF TEST DETAILS */
+/*  -err2 light set yellow to indicate start
+    -pressure displays show 4444
+    -switch panel will flash a light green, then off, on each row, one at a time, for 500ms
+    -a command is sent to each servo
+*/
+void selfTest() {
+  logEvent("Beginning a self test.");         // log start
+  errorLEDs.setPixelColor(2, errorLEDs.Color(255, 255, 0));   // yellow to indicate self test finished
+  errorLEDs.show();
+
+  // shown numbers on the pressure displays
+  for (int i=0; i<4; i++) {                   // for four displays
+    displays[i].showNumberDec(4444);          // code 4444 should be visible on all displays throughout the self test
+  }
+  logEvent("Pressure displays showing 4444");
+  delay(500);
+
+  //flash the lights on (green) and off, one light in each row at a time
+  leds[0].setPixelColor(0, leds[0].Color(0, 255, 0));     // turn only the first light green
+  leds[1].setPixelColor(0, leds[1].Color(0, 255, 0));     // turn only the first light green
+  leds[0].show();
+  leds[1].show();
+  delay(500);
+  for (int i=1; i<NUM_PIXELS; i++) {
+    leds[0].setPixelColor(i, leds[0].Color(0, 255, 0));   //green
+    leds[0].setPixelColor(i-1, leds[0].Color(0, 0, 0));   //off
+    leds[1].setPixelColor(i, leds[1].Color(0, 255, 0));   //green
+    leds[1].setPixelColor(i-1, leds[1].Color(0, 0, 0));   //off
+    leds[0].show();
+    leds[1].show();
+    delay(500);
+  }
+  leds[0].setPixelColor(NUM_PIXELS-1, leds[0].Color(0, 0, 0));   //off
+  leds[1].setPixelColor(NUM_PIXELS-1, leds[1].Color(0, 0, 0));   //off
+  leds[0].show();
+  leds[1].show();
+
+  int successfulServos = 0;   // used to track successful openings and closings
+// opening each servo and waiting for acknowledgment, then closing
+  for (int i=0; i<NUM_SERVOS; i++) {
+    if (testMoveServo(i, 90))
+      successfulServos++;
+    if (testMoveServo(i, 0))
+      successfulServos++;
+  }
+
+// set pressure displays to 0 for end of test
+  for (int i=0; i<4; i++) {                   // for four displays
+    displays[i].showNumberDec(0);             // set to zero
+  }
+  delay(1000);
+
+// end self test mode
+  logEvent("Self test mode ended.");
+  logEvent(String("Amount of successful servo turns: ") + successfulServos);      // ratio of successful servo moves
+  logEvent(String("Number of servos: ") + NUM_SERVOS);
+  logEvent("Note that the successful servo turns should equal twice the number of servos.");
+  errorLEDs.setPixelColor(2, errorLEDs.Color(0, 255, 0));   // green to indicate self test finished
+  errorLEDs.show();
+} // if there are no lights on the error panel other than light 2 as green, it is a success.
+ 
+// sends command to move a servo to a specified angle
+// waits the maxAcceptableDelay for acknowledgement or raises an error
+bool testMoveServo(int servo, int angle) {
+  uint8_t payload[3] = {servo, 0, angle} ;   // servo, angle in two bytes (to ninety degrees)
+  sendCommandPacket(MANIFOLD1, 9, payload);   // manifold, command (move servo), payload
+  bool connectionTimedOut = true;     // initialize with true, change to false if successful contact made
+  unsigned long testStartTime = millis();
+  while (millis() - testStartTime < maxAcceptableDelay) {    // wait for confirmation to be received
+    if (handleLoraInputSelfTest()) {     // note that the servo number is not returned in the command acknowledgement
+      logEvent(String("Succesfully opened servo ") + servo);
+      connectionTimedOut = false;
+      break;
+    }
+    delay(2);
+  }
+
+  if (connectionTimedOut) {
+    logEvent(String("WARNING: TIME OUT ERROR ON SERVO ") + servo);
+    // add sending a command to the mini PC with the error code
+    errorLEDs.setPixelColor(0, errorLEDs.Color(255, 0, 0));   //Light 0 to red for 252-servo timeout in self test
+    errorLEDs.show();
+  }
+  return !connectionTimedOut;   // return if servo was successful moved
+}
+
+// this is the handleLoraInput() code, with a different function call
+bool handleLoraInputSelfTest() {
+  static uint8_t buffer[64];
+  static int index = 0;
+
+  while (loraSerial.available()) {
+    uint8_t byte = loraSerial.read();
+
+    // wait for header
+    if (index == 0 && byte != HEADER)
+      continue;
+
+    buffer[index++] = byte;
+
+    // if footer found, process packet
+    if (index >= 2 && byte == FOOTER) {
+
+      if (checkPacketValidity(buffer, index)) {   // modified if statement
+      // note that the servo number is not returned in the command acknowledgement
+        // if command is acknowledgement of servo move command 9
+        if (buffer[4] == 100 && buffer[5] == 9) {
+          logPacket(buffer, index);
+          if (buffer[6] != 0) {     // if there is a fault
+            errorLEDs.setPixelColor(1, errorLEDs.Color(255, 255, 0));   //Light 1 to yellow as a warning
+            errorLEDs.show();
+            logEvent("Unknown servo fault detected above.");
+          }
+          index = 0;    // don't leave parser dirty, or next parsing may start corrupted
+          return true;
+        }
+      }
+
+      index = 0;  // reset for next packet
+    }
+
+    if (index >= 64) {
+      index = 0;  // overflow protection
+    }
+  }
+  return false;
+}
+
 
 
 
 // ---------------- SETUP ----------------
 void setup() {
-  Serial.begin(115200);       // for print statements
+  Serial.begin(115200);       // for print statements   // must be on for Serial.write to the mini PC
   loraSerial.begin(115200);   // begins the UART channel to communicate with the Lora
 
   initializeDisplays();       // initializes pressure displays
@@ -519,19 +652,20 @@ void setup() {
   initializeControlPanel();   // initializes valve control switches
   initializeIgnitionPanel();  // for ignition button
   initializeErrorPanel();     // for error lights and clearing button
+      // error panel is last to initialize as it can enable a self test
 
-  logEvent("System ready. Manifold ID: " + DEVICE_ID);
+  lastReceivedPacketTime = millis();      // to use in detecting connectivity errors
+  logEvent(String("System ready. DEVICE_ID: ") + DEVICE_ID);
 }
 
 // ---------------- LOOP ----------------
-
 void loop() {
   handleLoraInput();      // checks for new UART data, executes commands, updates telemetry displays
 
-  if (millis() - lastCheckControlPanel > 150) {
+  if (millis() - lastCheck > 150) {
     checkControlPanel();            // check for new valve commands
     checkIgnitionPanel();           // check if ignition
     checkErrorPanel();              // check if errors cleared
-    lastCheckControlPanel = millis();
+    lastCheck = millis();
   }
 }

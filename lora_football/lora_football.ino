@@ -1,10 +1,4 @@
 /*
-Rev P1 - Heltec LoRa WiFi V3 UART Bridge to Mega
-Rev P2 - fixed radio declaractions and hardware serial RX/TX
-- fixed footer, changeD telemetry to 105
-- fixed radio receiving code
-Rev P3 - removed duplicate prints in megaInput/serialInput
-Rev P4 - updated loraSerial to 115200, updated sd initialization
 Rev P5 - added sendError, command 17
 Rev P6 - added comments
 */
@@ -63,24 +57,25 @@ uint8_t computeCRC8(uint8_t* data, int length) {
 
 // ================== LOGGING =============================
 // common - used to give an explanation for events in the log
-void logEvent(const char* message) {
+void logEvent(String message) {
   if (dataFile) {
     dataFile.print(millis());
     dataFile.print(",");
     dataFile.println(message);
   }
-  //Serial.println(message);    //for debugging only
+  Serial.println(message);    //for debugging only
 }
 
 // common - prints packets to Serial monitor for use in debugging. 
-// void printPacket(uint8_t* packet, int telemetryLength) {
-//   for (int i=0; i<telemetryLength; i++) {
-//     Serial.print(packet[i]);
-//     Serial.print(" ");
-//   }
-//   Serial.println();
-// }
+void printPacket(uint8_t* packet, int telemetryLength) {
+  for (int i=0; i<telemetryLength; i++) {
+    Serial.print(packet[i]);
+    Serial.print(" ");
+  }
+  Serial.println();
+}
 
+// common - logs packets to SD card
 void logPacket(uint8_t* packet, int length) {
   if (dataFile) {
     dataFile.print(millis());
@@ -96,7 +91,7 @@ void logPacket(uint8_t* packet, int length) {
     }
   }
   
-  // printPacket(packet, length);  //used for serial debugging
+  printPacket(packet, length);  //used for serial debugging
 }
 
 //---------------INITIALIZING------------------------------
@@ -336,7 +331,7 @@ void sendError(int errorCommand) {
 // ====================== SETUP ===========================
 // ========================================================
 void setup() {
-  // Serial.begin(115200);
+  Serial.begin(115200);
 
   loraSerial.begin(115200, SERIAL_8N1, RX_LORA, TX_LORA); // RX(19), TX(20)
   SPI.begin(9, 11, 10, NSS);
@@ -354,6 +349,6 @@ void setup() {
 // ========================================================
 void loop() {     
   handleMegaInput();  
-  // handleManualSerial(); 
+  // handleManualSerial();    // for sending serial commands    // enter all fields except crc8 and footer
   handleRadioReceive();
 }

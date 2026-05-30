@@ -1,25 +1,4 @@
 /*
-Rev P1 - Heltec LoRa WiFi V3 UART Bridge to Mega
-- Accepts serial input (hex packets)
-- Prints all TX/RX traffic
-- No radio or ignition capabilities yet
-Rev P2 - Added radio and ignition capabilities
-- Packet validity check & CRC-8
-- SD logging for non-critical events
-- Critical error flags & transmission (servo issues)
-Rev P3 - fixed command acknowledgement
-Rev P4 - fixed radio pins
-- added sd card logging,
-- added tx/rx properly
-- handleMegaInput updated to accept loraSerial instead of Serial, and parser fixed
-- fixed radio receiving code
-Rev P5 - intended for use in capstone cold flow test, see LRE-008
-- added support for multiple devices on UART. 
-  - will need to update sendNextPacket to support changing devices
-- Critical/error packets send to mega_football instead of lora
-Rev P6 - removed critical handling, not supported. removed active capstone functions
-- added ignition communication to manifold 1
-- priority handling of non-telemetry commands
 Rev P7 - fixed priority sending of non-telemetry
 - added lastReceivedPacketTime for connectivity errors
 - removed unused transmission errors
@@ -96,18 +75,29 @@ void logEvent(const char* message) {
     dataFile.print(",");
     dataFile.println(message);
   }
-  //Serial.println(message);    //for debugging only
+  Serial.println(message);    //for debugging only
+}
+
+// common - used to give an explanation for events in the log
+void logEvent(String message) {
+  if (dataFile) {
+    dataFile.print(millis());
+    dataFile.print(",");
+    dataFile.println(message);
+  }
+  Serial.println(message);    //for debugging only
 }
 
 // common - prints packets to Serial monitor for use in debugging. 
-// void printPacket(uint8_t* packet, int telemetryLength) {
-//   for (int i=0; i<telemetryLength; i++) {
-//     Serial.print(packet[i]);
-//     Serial.print(" ");
-//   }
-//   Serial.println();
-// }
+void printPacket(uint8_t* packet, int telemetryLength) {
+  for (int i=0; i<telemetryLength; i++) {
+    Serial.print(packet[i]);
+    Serial.print(" ");
+  }
+  Serial.println();
+}
 
+// common - logs packets to SD card
 void logPacket(uint8_t* packet, int length) {
   if (dataFile) {
     dataFile.print(millis());
@@ -123,7 +113,7 @@ void logPacket(uint8_t* packet, int length) {
     }
   }
   
-  // printPacket(packet, length);  //used for serial debugging
+  printPacket(packet, length);  //used for serial debugging
 }
 
 //---------------INITIALIZING------------------------------
@@ -343,6 +333,21 @@ void setup() {
   }
 
   initializeDatalogging();
+
+  // turning on Son's relays - will move to function later
+  int relay2 = 39;
+  int relay3 = 40;
+  int relay4 = 41;
+
+  pinMode(relay2, OUTPUT);
+  pinMode(relay3, OUTPUT);
+  pinMode(relay4, OUTPUT);
+
+  digitalWrite(relay2, HIGH);
+  digitalWrite(relay3, HIGH);
+  digitalWrite(relay4, HIGH);   // allow current to the motors
+
+  // end of Son's relays
   logEvent("System Boot");
 }
 
