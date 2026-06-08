@@ -1,9 +1,9 @@
 /*
-Added self test function
-  To activate, hold error reset button for 500ms during power on.
-  Turns pressure displays to 4444, cycles through arm switch lights, commands each servo to open and close.
-Updated pinout
-Updated ignition arm light logic (no longer change detecting, just current state)
+fixed error lights reset
+updated error code definitions - refer to AV-104
+  dedicated light2 to connectivity
+
+Note: if switches are armed and open on power-up, they will send the valve-open command
 */
 
 const uint8_t ignitionCode = 27;
@@ -28,13 +28,13 @@ const uint8_t ignitionCode = 27;
 #define LED_PIN1 42
 #define IGNITION_LED_PIN 44
 #define ERROR_LED_PIN 45
-#define ERROR_BUTTON_PIN0 47
+#define ERROR_BUTTON0 47
 #define IGNITION_PIN 4
 #define IGNITION_ARM_PIN 6
 #define NUM_IGNITION_PIXELS 2
 #define NUM_ERROR_PIXELS 3
 
-const int switchPins[NUM_SWITCHES] = {25, 24, 27, 26, 29, 28, 31, 30};
+const int switchPins[NUM_SWITCHES] = {29, 28, 31, 30, 25, 24, 27, 26};
 Adafruit_NeoPixel leds[NUM_STRIPS] = {
   Adafruit_NeoPixel(NUM_PIXELS, LED_PIN0, NEO_GRB + NEO_KHZ800),
   Adafruit_NeoPixel(NUM_PIXELS, LED_PIN1, NEO_GRB + NEO_KHZ800)
@@ -57,7 +57,7 @@ uint8_t MANIFOLD2 = 2;
 
 unsigned long lastLoggedEvent = 0;
 unsigned long lastReceivedPacketTime;
-const int connectivityTimeout = 3500;
+const int connectivityTimeout = 8000;
 bool connectivityError = false;
 const int commandLength = 10;   //max command length (3 bytes of payload)
 unsigned long lastCheck = 0;
@@ -214,16 +214,16 @@ void initializeIgnitionPanel() {
 
 // initialize ignition button, error leds clear
 void initializeErrorPanel() {
-  pinMode(ERROR_BUTTON_PIN0, INPUT_PULLUP);
+  pinMode(ERROR_BUTTON0, INPUT_PULLUP);
   errorLEDs.begin();
   errorLEDs.clear();
   errorLEDs.show();
 
   // if error button is held down during power up, starts a self test
   // by only enabling the selfTest() function to be called during powerup, it cannot be accidentally run during normal operation
-  if (digitalRead(ERROR_BUTTON_PIN0) == LOW) {     // check if a self test should be run
+  if (digitalRead(ERROR_BUTTON0) == LOW) {     // check if a self test should be run
     delay(500);
-    if (digitalRead(ERROR_BUTTON_PIN0) == LOW)   // ensure it wasn't an accident
+    if (digitalRead(ERROR_BUTTON0) == LOW)   // ensure it wasn't an accident
       selfTest();     // execute self test
   }
 }
@@ -302,16 +302,17 @@ void checkIgnitionPanel() {
 // checks the error panel and updates the lights. One button/three lights
 // One button is used as error reset
 void checkErrorPanel() {
-  uint8_t current = digitalRead(ERROR_BUTTON_PIN0);    // read error button pin to determine if pressed
+  uint8_t current = digitalRead(ERROR_BUTTON0);    // read error button pin to determine if pressed
 
   if (current != lastErrorButtonState && (millis() - lastErrorButtonTime > DEBOUNCE_MS)) {    // debounce button
     lastErrorButtonTime = millis();      // update last time button was pressed
     lastErrorButtonState = current;      // store new state
 
     if (current == LOW) {   // pressed
-      for (int i=0; i < NUM_ERROR_PIXELS; i++) {
-        errorLEDs.setPixelColor(i, errorLEDs.Color(255, 0, 0));   // red
+      for (int i=0; i < NUM_ERROR_PIXELS - 1; i++) {            // do not reset the connectivity light
+        errorLEDs.setPixelColor(i, errorLEDs.Color(0, 0, 0));   // clear errors
       }
+      logEvent("All errors cleared.");
     }
   }
 
@@ -367,7 +368,10 @@ void handleLoraInput() {
     if (index >= 2 && byte == FOOTER) {
 
       if (checkPacketValidity(buffer, index)) {
-        connectivityError = false;    // reset every time a valid packet received
+        if (connectivityError) {
+          logEvent("Connection to Station has been recovered.");
+          connectivityError = false;    // reset when a valid packet is received, NOT every time something is received
+        }
         handleLoraPacket(buffer, index);
       } else {
         logEvent("LoRa Packet Invalid");
@@ -382,8 +386,9 @@ void handleLoraInput() {
   }
 
   // connectivity error, turn led red
-  if (millis() - lastReceivedPacketTime > connectivityTimeout && !connectivityError) {
-    errorLEDs.setPixelColor(2, errorLEDs.Color(255, 0, 0));
+  if (millis() - lastReceivedPacketTime > connectivityTimeout && !connectivityError) {   
+    logEvent("ERROR - LOST CONNECTION TO STATION");
+    errorLEDs.setPixelColor(2, errorLEDs.Color(100, 0, 0));
     errorLEDs.show();
     connectivityError = true;
     return;
@@ -413,7 +418,7 @@ void handleLoraPacket(uint8_t* packet, int length) {
         logEvent("Ack. received. SD Card successfull.");
       } else if (packet[5] == 207 && packet[6] == 2) {
         logEvent("Ack. received. SD Card failed.");
-        errorLEDs.setPixelColor(3, errorLEDs.Color(255, 0, 0));    //red
+        errorLEDs.setPixelColor(2, errorLEDs.Color(255, 255, 0));    //yellow
         display3.showNumberDec(packet[3]*1000 + 207);   //source_id + error code
       }
       break;
@@ -434,18 +439,23 @@ void handleLoraPacket(uint8_t* packet, int length) {
     case 207:   //sd card query   //can't currently be sent to this device but code is here
       if (packet[5] == 2) {
         display3.showNumberDec(packet[3]*1000 + 208);   //source_id + error code
-        errorLEDs.setPixelColor(3, errorLEDs.Color(255, 0, 0));   //red
+        errorLEDs.setPixelColor(1, errorLEDs.Color(255, 255, 0));   //yellow
       }
       break;
 
     case 208:
       display3.showNumberDec(packet[3]*1000 + 208);   //source_id + error code
-      errorLEDs.setPixelColor(3, errorLEDs.Color(255, 0, 0));   //red
+      errorLEDs.setPixelColor(1, errorLEDs.Color(255, 255, 0));   //yellow
+      break;
+
+    case 210:
+      logEvent("ERROR - MEGA_STATION AND LORA_STATION CONNECTION LOST");
+      errorLEDs.setPixelColor(2, errorLEDs.Color(0, 0, 255));   //blue
       break;
 
     case 250:
-      display3.showNumberDec(3333);   //random servo code
-      errorLEDs.setPixelColor(3, errorLEDs.Color(255, 0, 0));   //red
+      display3.showNumberDec(9250);   //9 and servo timeout error
+      errorLEDs.setPixelColor(1, errorLEDs.Color(255, 0, 0));   //red
       break;
 
     default:
@@ -518,7 +528,7 @@ void sendCommandPacket(uint8_t destination, uint8_t command, uint8_t* payload) {
 */
 void selfTest() {
   logEvent("Beginning a self test.");         // log start
-  errorLEDs.setPixelColor(2, errorLEDs.Color(255, 255, 0));   // yellow to indicate self test finished
+  errorLEDs.setPixelColor(0, errorLEDs.Color(255, 255, 0));   // yellow to indicate self test beginning
   errorLEDs.show();
 
   // shown numbers on the pressure displays
@@ -568,7 +578,7 @@ void selfTest() {
   logEvent(String("Amount of successful servo turns: ") + successfulServos);      // ratio of successful servo moves
   logEvent(String("Number of servos: ") + NUM_SERVOS);
   logEvent("Note that the successful servo turns should equal twice the number of servos.");
-  errorLEDs.setPixelColor(2, errorLEDs.Color(0, 255, 0));   // green to indicate self test finished
+  errorLEDs.setPixelColor(0, errorLEDs.Color(0, 255, 0));   // green to indicate self test finished
   errorLEDs.show();
 } // if there are no lights on the error panel other than light 2 as green, it is a success.
  
@@ -591,7 +601,7 @@ bool testMoveServo(int servo, int angle) {
   if (connectionTimedOut) {
     logEvent(String("WARNING: TIME OUT ERROR ON SERVO ") + servo);
     // add sending a command to the mini PC with the error code
-    errorLEDs.setPixelColor(0, errorLEDs.Color(255, 0, 0));   //Light 0 to red for 252-servo timeout in self test
+    errorLEDs.setPixelColor(1, errorLEDs.Color(255, 0, 0));   //Light 1 to red for 250-servo timeout
     errorLEDs.show();
   }
   return !connectionTimedOut;   // return if servo was successful moved
