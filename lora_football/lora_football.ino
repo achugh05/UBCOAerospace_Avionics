@@ -27,7 +27,7 @@ SX1262 radio = new Module(NSS, DIO1, RESET, BUSY);
 #define SD_CS 5
 File dataFile;
 
-#define RX_LORA 19    // alternatively, use 48 and 47 - though it may not work on specific club devices
+#define RX_LORA 19
 #define TX_LORA 20
 
 // transmission constants
