@@ -1,5 +1,5 @@
 /*
-Fixed ignitionCode bug, removed sd card logging
+Added sync, fixed compilation bus
 */
 const uint8_t ignitionCode = 27;
 
@@ -74,6 +74,18 @@ void printPacket(uint8_t* packet, int telemetryLength) {
   Serial.println();
 }
 
+void sendSyncSignal() {   //only for static fire or when other devices are being used
+  const int SYNC = 19;
+  pinMode(SYNC, OUTPUT);    //for syncing with other devices
+  digitalWrite(SYNC, LOW);
+  logEvent("Sync low");
+  delay(300);
+  digitalWrite(SYNC, HIGH);
+  logEvent("Sync high");
+  digitalWrite(SYNC, LOW);    // used for syncing time
+  logEvent("Sync low");
+}
+
 
 // ---------------- PACKET VALIDATION ----------------
 // common - checks if the header, version, footer, or CRC byte are correct. Does not check device ID
@@ -113,7 +125,7 @@ void handleRadioReceive() {
 // deals with radio commands
 void handleRadioPacket(uint8_t* packet, int length) {
   logEvent("Handling radio packet below: ");
-  logPacket(packet, length);
+  printPacket(packet, length);
   uint8_t command = packet[4];
 
   if (packet[2] != DEVICE_ID) {   //if DEST_ID doesn't equal this manifold, forward to manifolds
@@ -127,7 +139,7 @@ void handleRadioPacket(uint8_t* packet, int length) {
   switch (command) {
 
     case 4: // Fire Ignition - Must be in brackets to prevent "jump to case label" error
-      receivedIgnitionCode = packet[5]
+      receivedIgnitionCode = packet[5];
       if (receivedIgnitionCode == ignitionCode) { 
         logEvent("Valid ignition sequence. Activating.");
         packet[2] = 1;    //forward to manifold 1, for a backup reading of the pressure sensor load cell. Remove the forwarding command if not used.
@@ -176,7 +188,7 @@ void handleMegaInput() {
         if (buffer[4] != 105) {   //immediately forward non-telemetry packets
           sendNextPacket();
         } else {
-          logPacket(lastManifoldPacket, index);
+          printPacket(lastManifoldPacket, index);
         }
       }
 
@@ -192,7 +204,7 @@ void sendRadioPacket(uint8_t* lastPacket, int length) {
   int err = radio.transmit(lastPacket, length);
   if (err != RADIOLIB_ERR_NONE) logEvent("Telemetry TX Fail");
   radio.startReceive();
-  logPacket(lastPacket, length);
+  printPacket(lastPacket, length);
 }
 
 // sends most recent manifold packet
@@ -237,7 +249,7 @@ void sendCommandAck(uint8_t originalCommand, uint8_t fault) {
 
   sendRadioPacket(packet, 9);
   logEvent("acknowledgement sent");
-  logPacket(packet, 9);
+  printPacket(packet, 9);
 }
 
 
@@ -261,18 +273,7 @@ void setup() {
     while (true);
   }
 
-  // turning on Son's relays - will move to function later
-  int relay2 = 39;
-  int relay3 = 40;
-  int relay4 = 41;
-
-  pinMode(relay2, OUTPUT);
-  pinMode(relay3, OUTPUT);
-  pinMode(relay4, OUTPUT);
-
-  digitalWrite(relay2, HIGH);
-  digitalWrite(relay3, HIGH);
-  digitalWrite(relay4, HIGH);   // allow current to the motors
+  sendSyncSignal();   // for syncing other devices, raises a pin low-high-low
 
   // end of Son's relays
   logEvent("System Boot");
