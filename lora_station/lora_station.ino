@@ -37,7 +37,6 @@ uint8_t lastManifoldPacket[64];
 int lastManifoldLength = 0;
 
 unsigned long lastTelemetrySend = 0;
-unsigned long lastLoggedEvent = 0;
 unsigned long lastReceivedPacketTime;
 const int connectivityTimeout = 1200;
 bool connectivityError = false;
