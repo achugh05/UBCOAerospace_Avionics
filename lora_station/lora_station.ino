@@ -1,15 +1,9 @@
 /*
-Rev P7 - fixed priority sending of non-telemetry
-- added lastReceivedPacketTime for connectivity errors
-- removed unused transmission errors
-- added command 17
-Rev P8 - added comments, commonalities, removed second UART functionality
+Fixed ignitionCode bug, removed sd card logging
 */
 const uint8_t ignitionCode = 27;
 
-#include <SPI.h>
 #include <RadioLib.h>
-#include <SD.h>
 
 HardwareSerial loraSerial(1);
 
@@ -38,8 +32,6 @@ uint8_t DEVICE_ID = 0;
 #define MANIFOLD2   2
 #define CAPSTONE    6
 
-#define SD_CS 5
-File dataFile;
 
 uint8_t lastManifoldPacket[64];
 int lastManifoldLength = 0;
@@ -68,23 +60,8 @@ uint8_t computeCRC8(uint8_t* data, int length) {
 }
 
 // ================== LOGGING =============================
-// common - used to give an explanation for events in the log
-void logEvent(const char* message) {
-  if (dataFile) {
-    dataFile.print(millis());
-    dataFile.print(",");
-    dataFile.println(message);
-  }
-  Serial.println(message);    //for debugging only
-}
-
-// common - used to give an explanation for events in the log
+// common to loras - used to give an explanation for events in the log
 void logEvent(String message) {
-  if (dataFile) {
-    dataFile.print(millis());
-    dataFile.print(",");
-    dataFile.println(message);
-  }
   Serial.println(message);    //for debugging only
 }
 
@@ -97,50 +74,6 @@ void printPacket(uint8_t* packet, int telemetryLength) {
   Serial.println();
 }
 
-// common - logs packets to SD card
-void logPacket(uint8_t* packet, int length) {
-  if (dataFile) {
-    dataFile.print(millis());
-    dataFile.print(",");
-    for (int i=0; i < length; i++) {
-      dataFile.print(packet[i]);
-      dataFile.print(",");
-    }
-    dataFile.println();
-    if (millis() - lastLoggedEvent >= 300) {    //only flush to log every 300ms to avoid delays
-      lastLoggedEvent = millis();
-      dataFile.flush();
-    }
-  }
-  
-  printPacket(packet, length);  //used for serial debugging
-}
-
-//---------------INITIALIZING------------------------------
-// common - initializes SD module and creates a unique file
-void initializeDatalogging() {
-  if (!SD.begin(SD_CS)) {
-    Serial.println("SD init failed! NO LOGGING.");
-    sendError(208);   //if sd card doesn't initialize properly, an error will be sent
-    return;
-  }
-
-  int fileIndex = 0;
-  String filename;
-
-  while (true) {      //must create a new file upon power-up
-    filename = "DATA_" + String(fileIndex) + ".csv";
-    if (!SD.exists(filename)) break;
-    fileIndex++;
-  } 
-
-  dataFile = SD.open(filename, FILE_WRITE);
-
-  if (dataFile) {
-    dataFile.print("Created file number ");
-    dataFile.println(fileIndex);
-  }
-}
 
 // ---------------- PACKET VALIDATION ----------------
 // common - checks if the header, version, footer, or CRC byte are correct. Does not check device ID
@@ -194,7 +127,7 @@ void handleRadioPacket(uint8_t* packet, int length) {
   switch (command) {
 
     case 4: // Fire Ignition - Must be in brackets to prevent "jump to case label" error
-      receivedIgnitionCode = packet[6] << 8 | packet[7];
+      receivedIgnitionCode = packet[5]
       if (receivedIgnitionCode == ignitionCode) { 
         logEvent("Valid ignition sequence. Activating.");
         packet[2] = 1;    //forward to manifold 1, for a backup reading of the pressure sensor load cell. Remove the forwarding command if not used.
@@ -207,10 +140,6 @@ void handleRadioPacket(uint8_t* packet, int length) {
       } else {
         logEvent("Invalid ignition code... beware");
       }
-      break;
-
-    case 17:
-      initializeDatalogging();
       break;
 
     default: break;
@@ -331,8 +260,6 @@ void setup() {
     Serial.println("LoRa init failed!");
     while (true);
   }
-
-  initializeDatalogging();
 
   // turning on Son's relays - will move to function later
   int relay2 = 39;
