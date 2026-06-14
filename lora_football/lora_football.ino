@@ -1,17 +1,7 @@
 /*
-Rev P5 - added sendError, command 17
-Rev P6 - added comments
+removed sd card logging and unused variables
 */
-
-#include <SPI.h>
 #include <RadioLib.h>
-#include <SD.h>
-
-//system parameters
-const int NUM_SERVOS = 3;
-const int NUM_PRESSURES = 3;
-int valvePositions[NUM_SERVOS];
-int pressures[NUM_PRESSURES];
 
 HardwareSerial loraSerial(1);   //UART bus declaration
 
@@ -24,20 +14,14 @@ HardwareSerial loraSerial(1);   //UART bus declaration
 SX1262 radio = new Module(NSS, DIO1, RESET, BUSY);
 
 // ================== SYSTEM CONFIG ==================
-#define SD_CS 5
-File dataFile;
-
 #define RX_LORA 19
 #define TX_LORA 20
 
 // transmission constants
 #define HEADER 0xAB
 #define VERSION 1
-uint8_t DEVICE_ID = 3;
+#define DEVICE_ID 3
 #define FOOTER 0xEF
-
-unsigned long lastLoggedEvent = 0;
-
 
 // common - computes the CRC8 byte for a given array
 uint8_t computeCRC8(uint8_t* data, int length) {
@@ -56,13 +40,8 @@ uint8_t computeCRC8(uint8_t* data, int length) {
 }
 
 // ================== LOGGING =============================
-// common - used to give an explanation for events in the log
+// common for loras - used to give an explanation for events in the log
 void logEvent(String message) {
-  if (dataFile) {
-    dataFile.print(millis());
-    dataFile.print(",");
-    dataFile.println(message);
-  }
   Serial.println(message);    //for debugging only
 }
 
@@ -73,51 +52,6 @@ void printPacket(uint8_t* packet, int telemetryLength) {
     Serial.print(" ");
   }
   Serial.println();
-}
-
-// common - logs packets to SD card
-void logPacket(uint8_t* packet, int length) {
-  if (dataFile) {
-    dataFile.print(millis());
-    dataFile.print(",");
-    for (int i=0; i < length; i++) {
-      dataFile.print(packet[i]);
-      dataFile.print(",");
-    }
-    dataFile.println();
-    if (millis() - lastLoggedEvent >= 300) {    //only flush to log every 300ms to avoid delays
-      lastLoggedEvent = millis();
-      dataFile.flush();
-    }
-  }
-  
-  printPacket(packet, length);  //used for serial debugging
-}
-
-//---------------INITIALIZING------------------------------
-// common - initializes SD module and creates a unique file
-void initializeDatalogging() {
-  if (!SD.begin(SD_CS)) {
-    Serial.println("SD init failed! NO LOGGING.");
-    sendError(208);   //if sd card doesn't initialize properly, an error will be sent
-    return;
-  }
-
-  int fileIndex = 0;
-  String filename;
-
-  while (true) {      //must create a new file upon power-up
-    filename = "DATA_" + String(fileIndex) + ".csv";
-    if (!SD.exists(filename)) break;
-    fileIndex++;
-  } 
-
-  dataFile = SD.open(filename, FILE_WRITE);
-
-  if (dataFile) {
-    dataFile.print("Created file number ");
-    dataFile.println(fileIndex);
-  }
 }
 
 // ---------------- PACKET VALIDATION ----------------
@@ -156,7 +90,7 @@ void handleRadioReceive() {
 
 // deals with radio commands
 void handleRadioPacket(uint8_t* packet, int length) {
-  logPacket(packet, length);
+  printPacket(packet, length);
 
   if (packet[2] != DEVICE_ID) {   //if DEST_ID doesn't equal this device
     loraSerial.write(packet, length);
@@ -203,14 +137,6 @@ void handleMegaPacket(uint8_t* packet, int length) {
     uint8_t fault = 0;
 
     switch (command) {
-      case 17:    //reinitialize data card
-        initializeDatalogging();
-        break;
-
-      case 207:   //query sd card status
-        fault = (dataFile) ? 1 : 2;
-        break;
-
       default:
         break;
     }
@@ -238,12 +164,12 @@ void sendCommandAck(uint8_t originalCommand, uint8_t faultRaised) {
 
   loraSerial.write(packet, 9);
   logEvent("Acknowledgement sent");
-  logPacket(packet, 9);
+  printPacket(packet, 9);
 }
 
 // send a packet five times over radio
 void sendRadioPacket(uint8_t* lastPacket, int length) {
-  logPacket(lastPacket, length);
+  printPacket(lastPacket, length);
 
   for (int i = 0; i < 5; i++) {   // repeat five times, to ensure command is received
     radio.standby();
@@ -323,7 +249,7 @@ void sendError(int errorCommand) {
 //     sendRadioPacket(packet, fullLength);
 //   } else {
 //     logEvent("The manual packet below is invalid and not sent:");
-//     logPacket(packet, fullLength);
+//     printPacket(packet, fullLength);
 //   }
 // }
 
@@ -333,14 +259,13 @@ void sendError(int errorCommand) {
 void setup() {
   Serial.begin(115200);
 
-  loraSerial.begin(115200, SERIAL_8N1, RX_LORA, TX_LORA); // RX(19), TX(20)
+  loraSerial.begin(115200, SERIAL_8N1, RX_LORA, TX_LORA);
   SPI.begin(9, 11, 10, NSS);
 
   if (radio.begin(900.0, 125.0, 10, 8, 0x12, 22) != RADIOLIB_ERR_NONE) {
     while (true);
   }
 
-  initializeDatalogging();
   logEvent("System Boot");
 }
 
