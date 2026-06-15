@@ -1,64 +1,27 @@
 //Board: Heltec LoRa Wifi ESP32 V3
 //All devices are to be compatible with 5V
-
-/* FUTURE CHANGES TO INCLUDE */
 /* More comments and explanations
-  large operations extrapolated into functions
-  Correcting serial writes to logEvent()
-  Finalized testing of pinouts for ADS1256
-  Remove timing statements
-  Potentially further speed optimizations
-
-  However, while the current ADC pins are untested, the code works for the listed alt pins
+While the current ADC pins are untested, the code works for the listed alt pins
 */
 
 
-
-#include <Arduino.h>
+#include <ADS1256.h>
+#include <HX711.h>
 #include <SPI.h>
 #include <SD.h>
 #include <Wire.h>
-#include <HX711.h>    //load cell amp library
 
-// Prevent ADS1256 library from initializing with the default SPI instance
-#define ADS1256_SPI_ALREADY_STARTED 1
-#include <ADS1256.h>
 
-// --- PIN DEFINITIONS ---
+//////////////////////////////////ADS/////////////////////////////
 constexpr int8_t PIN_ADC0_SCK  = 42;    //alt pins include 19, 20, 48, 4
 constexpr int8_t PIN_ADC0_MISO_DOUT = 40;
 constexpr int8_t PIN_ADC0_MOSI_DIN = 41;
 constexpr int8_t PIN_ADC0_DRDY = 39;
+const uint8_t ADSchannels[3] = {1, 3, 5}; //must be ordered smallest to largest
+const double ADS1256_VREF = 5.00;
 
-constexpr float_t ADS1256_VREF = 5.00;
-
-// built in ADC pins
-uint8_t pins[4] = {1, 3, 5, 38};   //last pin is for sync voltage
-
-File dataFile;        //to log SD card to
-constexpr int SD_SCK  = 35;
-constexpr int SD_MISO = 34;
-constexpr int SD_MOSI = 33;
-constexpr int SD_CS   = 47;
-SPIClass sdSPI(FSPI);
-unsigned long lastLoggedEvent = 0;    //for use in determining if it has been a while since last flushed data to sd card
-
-// load cell
-#define HX_DATA 6
-#define HX_CLK  7
-const float cali_value = 8.7;   //orginally 44.15 - update as required
-HX711 cell;
-double loadCellValue;   //globally update load cell value
-
-
-
-
-
-// Instantiate the HSPI bus
-SPIClass adcSpi(HSPI);
-
-// Instantiate the ADS1256
-ADS1256 adc0(
+SPIClass adcSpi(HSPI); // Instantiate the HSPI bus
+ADS1256 adc0(          // Instantiate the ADS1256
   PIN_ADC0_DRDY,
   ADS1256::PIN_UNUSED,
   ADS1256::PIN_UNUSED,
@@ -67,54 +30,80 @@ ADS1256 adc0(
   ADS1256_VREF,
   &adcSpi
 );
+//////////////////////////////////ADS/////////////////////////////
+
+//////////////////////////////////SD CARD/////////////////////////////
+File dataFile;        //to log SD card to
+constexpr int SD_SCK  = 35;
+constexpr int SD_MISO = 34;
+constexpr int SD_MOSI = 33;
+constexpr int SD_CS   = 47;
+SPIClass sdSPI(FSPI);
+unsigned long lastLoggedEvent = 0;    //for use in determining if it has been a while since last flushed data to sd card
+//////////////////////////////////SD CARD/////////////////////////////
+
+//////////////////////////////////LOAD CELL/////////////////////////////
+#define HX_DATA 6
+#define HX_CLK  7
+const double cali_value = 8.7;   //orginally 44.15 - update as required
+HX711 cell;
+double loadCellValue;   //globally update load cell value
+//////////////////////////////////LOAD CELL/////////////////////////////
+
+uint8_t pins[4] = {1, 3, 5, 38};  // built in ADC pins + sync voltage
+double packet[8];
+double pressure_caliA[3];   //pressure sensor calibration constants (calculated in calibratePressureSensors())
+double pressure_caliB[3];
 
 
+
+
+/////////////////////////////////FUNCTIONS///////////////////////////////
 void initializeADC0() {
-  Serial.println("\n=================================");
-  Serial.println("    ANSHLABS™ ANSH DEVICE: ADS1256 TEST       ");
-  Serial.println("=================================");
+  logEvent("\n=================================");
+  logEvent("    ANSHLABS™ ANSH DEVICE: ADS1256 TEST       ");
+  logEvent("=================================");
 
-  Serial.println("[1/4] Starting HSPI Bus...");
-  adcSpi.begin(PIN_ADC0_SCK, PIN_ADC0_MISO, PIN_ADC0_MOSI);
+  logEvent("[1/4] Starting HSPI Bus...");
+  adcSpi.begin(PIN_ADC0_SCK, PIN_ADC0_MISO_DOUT, PIN_ADC0_MOSI_DIN);
 
-  Serial.println("[2/4] Initializing ADS1256...");
+  logEvent("[2/4] Initializing ADS1256...");
   adc0.InitializeADC();
   
-  Serial.println("[3/4] Configuring ADC Settings...");
-  adc0.setDRATE(DRATE_30000SPS);
+  logEvent("[3/4] Configuring ADC Settings...");
+  adc0.setDRATE(DRATE_30000SPS);    //set speed to max
   adc0.setPGA(PGA_1);
   adc0.setBuffer(1);
 
-  Serial.println("[4/4] Running Comms Health Check...");
+  logEvent("[4/4] Running Comms Health Check...");
   adc0.setMUX(SING_0);
   int32_t testVal = adc0.readSingle();
 
   // If MISO is disconnected, it usually returns 0 or 0xFFFFFFFF (-1)
   if (testVal == 0 || testVal == 0xFFFFFFFF) {
-    Serial.println(" ERROR: ADS1256 returned empty or faulty data.");
-    Serial.println("    -> Check your 5V power to the ADS1256.");
-    Serial.println("    -> Check MISO, MOSI, SCK, and CS wiring.");
-    Serial.println("    -> Check if pins 19/20 are crashing the USB.");
+    logEvent(" ERROR: ADS1256 returned empty or faulty data.");
+    logEvent("    -> Check your 5V power to the ADS1256.");
+    logEvent("    -> Check MISO, MOSI, SCK, and CS wiring.");
+    logEvent("    -> Check if pins 19/20 are crashing the USB.");
   } else {
-    Serial.println(" SUCCESS: ADS1256 is communicating perfectly!");
+    logEvent(" SUCCESS: ADS1256 is communicating perfectly!");
   }
-
-  // adc0.beginContinuous();
 }
 
 void initializeDatalogging() {
-  pinMode(SD_CS, OUTPUT);
-  digitalWrite(SD_CS, HIGH);
+  if (!sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS)) {
+    Serial.println("SD init failed! NO LOGGING.");
+  }
 
   // Start SPI with the working pins
   if (!SD.begin(SD_CS, sdSPI, 400000)) {
-    Serial.println("SD initialization failed!");
+    logEvent("SD initialization failed!");
     while (true) {
       delay(1000);
     }
   }
 
-  Serial.println("SD initialization successful!");
+  logEvent("SD initialization successful!");
 
   int fileIndex = 0;
   String filename;
@@ -145,7 +134,7 @@ void printPacket(double* packet, int telemetryLength) {
   Serial.println();   //function can be commented out to increase speed
 }
 
-// logs packets to SD card
+// common - logs packets to SD card
 void logPacket(double* packet, int length) {
   if (dataFile) {
     dataFile.print(millis());
@@ -155,7 +144,7 @@ void logPacket(double* packet, int length) {
       dataFile.print(",");
     }
     dataFile.println();
-    if (millis() - lastLoggedEvent >= 300) {    //only flush to log every 300ms to avoid delays
+    if (millis() - lastLoggedEvent >= 150) {    //avoid delays by not flushing every time
       lastLoggedEvent = millis();
       dataFile.flush();
     }
@@ -181,57 +170,82 @@ void initializeLoadCell() {
   logEvent("Load cell set.");
 }
 
-float convertVoltsToPSI(float voltage) {
-    //float psi = (voltage - SENSOR_VMIN) * (PSI_MAX / (SENSOR_VMAX - SENSOR_VMIN));
-    float psi = (voltage - 0.5) * (500 / (4.5 - 0.5));
-    return psi;
+void calibratePressureSensors() {
+  //V1, V2, P1, P2 values can be obtained experimentally by any two known pressure readings
+  const double V1_mV[3] = {500, 500, 500};
+  const double V2_mV[3] = {4500, 4500, 4500};
+  const double P1[3] = {0, 0, 0};
+  const double P2[3] = {500, 500, 500};
+
+  for (int i=0; i<3; i++) {
+    pressure_caliA[i] = (P2[i] - P1[i]) / (V2_mV[i] - V1_mV[i]);
+    pressure_caliB[i] = P1[i] - pressure_caliA[i] * V1_mV[i];
+  }
 }
 
+double convertMVtoPSI(double voltage, int cellNum) {
+    //double psi = (voltage - volt2) * (psi1 / (psi2 * (volt1 - volt2)));
+    return pressure_caliA[cellNum] * voltage / 1000 + pressure_caliB[cellNum];    //voltage is given in mV, needs to be in V
+    //calibration constants calculated earlier in the code
+}
+
+void readADS1256() {
+  // Read only desired channels
+  int j = 0;
+  for (int i = 0; i < 8; i++) {
+    int32_t raw = adc0.cycleSingle();   //do not use undesired mux reading
+    if (i == ADSchannels[j]) {
+      j++;
+      double voltage = ((double)raw / 8388607.0f) * ADS1256_VREF;
+      packet[j] = convertMVtoPSI(voltage, j);
+    }
+  }
+}
+
+void readBuiltInADCs() {
+  //built-in adc values (3 for pressure, 1 for sync)
+  for (int i = 0; i < 3; i++) {   // log Pin values
+    long raw = analogRead(pins[i]);   //config and read from channel i
+    double voltage = ( (double)raw / 4095.0 ) * (3.3/1); // convert to voltage (vref=5, gain=1)  
+    packet[i+3] = convertMVtoPSI(voltage, i);
+  }
+}
+
+void readLoadCell() {
+  if (cell.is_ready()) {
+    loadCellValue = cell.get_units();   //only update with new data
+  }
+  packet[7] = loadCellValue;  //if no new value, remains old value (80Hz update)
+}
+
+
+
+
+
+
+
+
+//////////////////////////////////LOOP///////////////////////////////////
 void setup() {
   Serial.begin(115200);
-  
-  if (!sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS)) {
-    Serial.println("SD init failed! NO LOGGING.");
-  }
   initializeDatalogging();
   initializeLoadCell();
   initializeADC0();
-
   logEvent("Time,Channel0,Channel1,Channel2,Pin0,Pin1,Pin2,Sync,LoadCell");
 }
 
 void loop() {
-  uint32_t t0 = millis();
-  double packet[8];
-
-  // Read channels
-  for (int i = 0; i < 3; i++) {
-    int32_t raw = adc0.cycleSingle();
-    float voltage = ((float)raw / 8388607.0f) * ADS1256_VREF;
-    packet[i] = convertVoltsToPSI(voltage);
-  }
-  for (int i=3; i<8; i++) {
-    adc0.cycleSingle();
-  }
-  uint32_t t1 = millis();
-
-  //built-in adc values (3 for pressure, 1 for sync)
-  for (int i = 0; i < 4; i++) {   // log Pin values
-    long raw = analogRead(pins[i]);   //config and read from channel i
-    float voltage = ( (float)raw / 4095.0 ) * (3.3/1); // convert to voltage (vref=5, gain=1)  
-    packet[i+3] = convertVoltsToPSI(voltage);
-  }
-  uint32_t t2 = millis();
-
-  //load cell values
-  if (cell.is_ready()) {
-    loadCellValue = cell.get_units();   //only update with new data
-  }
-  packet[7] = loadCellValue;  //if no new value, remains old value (80Hz)
-  uint32_t t3 = millis();
+  uint32_t t0 = micros();
+  readADS1256();
+  uint32_t t1 = micros();
+  readBuiltInADCs();
+  uint32_t t2 = micros();
+  readLoadCell();
+  uint32_t t3 = micros();
   logPacket(packet, 8);
-  uint32_t t4 = millis();
+  uint32_t t4 = micros();
 
+  //analyze delays
   Serial.print("ADS1256: ");
   Serial.print(t1-t0);
   Serial.print(", Built In ADCs: ");
