@@ -1,0 +1,849 @@
+/**
+ * Code for Owen's Data Logger V2
+ *
+ * Specifically uses the QYF-0722V2 breakout board for the ADC1256 ADC,
+ * the Adafruit NAU7802 ADC breakout board, a microSD card breakout board,
+ * and an ESP32-WROOM-32 DEVKITV1 as the microcontroller. 
+ * 
+ * Improves on version 1 by taking advantage of the ESP32's dual cores to
+ * perform asynchronous conversions and SD card writes, allowing for faster
+ * sampling rates.
+ * 
+ * All code is kept within a single file to allow for use with the Arduino IDE.
+ * 
+ * Author: Julian Joaquin
+ * Date: 2026-Apr-07
+ * Version: 2.0.1
+ * 
+ * ADC0: ADS1256
+ * ADC1: NAU7802
+ * 
+ * CHANGELOG:
+ * 2.0.0: Release
+ * 2.0.1: Added assertions for improved testing
+ *  
+ * 
+ *******************************************************************************
+ * BINARY OUTPUT FILE STRUCTURE
+ *******************************************************************************
+ * 
+ *  8-BITS -- NUMBER OF 32-BIT VALUES IN RECORD
+ *  8-BITS -- RECORD SENSOR TYPE
+ * 48-BITS -- RECORD TIME IN MICROSECONDS
+ * 32-BITS -- RAW VALUE 0
+ * 32-BITS -- RAW VALUE 1
+ * ...     -- ...
+ * (no record termination)
+ * 
+ *******************************************************************************
+ * DEPENDENCIES
+ *******************************************************************************
+ * 
+ * **BOARDS**
+ * esp32                by Espressif Systems
+ *
+ * **LIBRARIES**
+ * Adafruit NAU7802     by Adafruit
+ * ADS1256              by Curious Scientist
+ */
+
+
+
+/*******************************************************************************
+ * INCLUDES
+ ******************************************************************************/
+
+// Prevent ADS1256 library from initializing with the default SPI instance
+#define ADS1256_SPI_ALREADY_STARTED 1
+
+#include <Arduino.h>
+
+#include <atomic>
+
+#include <esp_system.h>
+#include <esp_timer.h>
+
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <Adafruit_NAU7802.h>
+#include <ADS1256.h>
+
+// Production code will use the ESP32-WROOM-32 DEVKITV1
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+  #error "This code is designed to run only on the ESP32-WROOM-32 DEVKITV1"
+#endif
+
+
+/*******************************************************************************
+ * DEFINES
+ ******************************************************************************/
+
+//#define USE_METADATA_FILE
+#define ENABLE_LOGGER_ASSERTS
+
+
+/*******************************************************************************
+ * MACROS
+ ******************************************************************************/
+
+
+#ifdef ENABLE_LOGGER_ASSERTS
+  // Use to check for impossible conditions during testing
+  #define LOGGER_ASSERT(cond, msg)                                         \
+    do {                                                                   \
+      if (!(cond)) {                                                       \
+        char _assert_buf[128];                                             \
+        snprintf(_assert_buf, sizeof(_assert_buf),                         \
+                "ASSERT on [%s:%d]: \"%s\":\n\t\t%s",                      \
+                 __FILE__, __LINE__, (msg), #cond);                        \
+        faultHandler(_assert_buf);                                         \
+      }                                                                    \
+    } while (0)
+  #define LOGGER_WARN_IF(cond, msg)                                        \
+    do {                                                                   \
+      if (cond) {                                                          \
+        warn((msg));                                                       \
+      }                                                                    \
+    } while (0)
+#else
+  #define LOGGER_ASSERT(cond, msg)    do { } while (0)
+  #define LOGGER_WARN_IF(cond, msg)   do { } while (0)
+#endif
+
+
+/*******************************************************************************
+ * PIN ASSIGNMENTS
+ ******************************************************************************/
+
+
+#ifndef LED_BUILTIN
+  // specific to the ESP32-DEVKITV1
+  #define LED_BUILTIN 2
+#endif
+// SD card activity indicator
+constexpr static int8_t PIN_EXTLED1               = 13;
+// fault indicator
+constexpr static int8_t PIN_EXTLED2               = 32;
+
+// VSPI bus
+constexpr static int8_t PIN_ADC0_SPI_SCK          = 18;
+constexpr static int8_t PIN_ADC0_SPI_MISO         = 19;
+constexpr static int8_t PIN_ADC0_SPI_MOSI         = 23;
+constexpr static int8_t PIN_ADC0_SPI_CS           = 4;
+constexpr static int8_t PIN_ADC0_SPI_DRDY         = 34;
+
+// alt SPI bus (I messed up the pins for HSPI but it's fine)
+constexpr static int8_t PIN_SD_SPI_SCK            = 33;
+constexpr static int8_t PIN_SD_SPI_MISO           = 25;
+constexpr static int8_t PIN_SD_SPI_MOSI           = 26;
+constexpr static int8_t PIN_SD_SPI_CS             = 15;
+
+// I2C bus
+constexpr static int8_t PIN_ADC1_I2C_SDA          = 21;
+constexpr static int8_t PIN_ADC1_I2C_SCL          = 22;
+
+
+/*******************************************************************************
+ * LOGGING CONSTANTS
+ ******************************************************************************/
+
+
+constexpr static uint32_t SERIAL_BAUD_RATE        = 115200;
+
+// VREF on QYF-0722V2 uses ADR03 2.5V voltage reference
+constexpr static float_t ADS1256_VREF             = 2.500;
+
+constexpr static uint8_t ADC0_DATA_ID             = 56;
+constexpr static size_t ADC0_FRAME_SIZE           = 8;
+
+constexpr static uint8_t ADC1_DATA_ID             = 2;
+constexpr static size_t ADC1_FRAME_SIZE           = 2;
+
+constexpr static size_t LOG_BUFFER_SIZE           = 8192; // this is in bytes!
+constexpr static size_t LOG_WRITE_THRESHOLD       = 4096; // this is in bytes!
+
+constexpr static uint8_t MAX_ROTATION_SKIPS       = 10; // arbitrary right now
+
+static_assert(LOG_WRITE_THRESHOLD <= LOG_BUFFER_SIZE,
+              "LOG_WRITE_THRESHOLD must be <= LOG_BUFFER_SIZE");
+
+constexpr static char LOG_FILENAME[] = "/log.bin";
+constexpr static char METADATA_FILENAME[] = "/metadata.txt";
+
+
+/*******************************************************************************
+ * TASK CONSTANTS
+ ******************************************************************************/
+
+
+constexpr static BaseType_t SENSOR_TASK_CORE = 1;
+
+constexpr static uint32_t SD_CARD_TASK_STACK_SIZE = 8192; // this is in bytes!
+constexpr static BaseType_t SD_CARD_TASK_CORE = 0;
+constexpr static UBaseType_t SD_CARD_TASK_PRIORITY = tskIDLE_PRIORITY + 1;
+
+constexpr static bool CREATE_NEW_FILE = true;
+
+
+/*******************************************************************************
+ * TYPE DEFINITIONS
+ ******************************************************************************/
+
+
+enum class BufferState_t {
+  BUFFER_FREE,
+  BUFFER_FILLING,
+  BUFFER_FULL,
+  BUFFER_DRAINING
+};
+
+struct LogBuffer {
+  uint8_t data[LOG_BUFFER_SIZE];
+  size_t used;
+};
+
+
+/*******************************************************************************
+ * FUNCTION DECLARATIONS
+ ******************************************************************************/
+
+ 
+void sdWriterTask(void* pvParameters);
+
+void blink();
+uint64_t makeHeader(uint64_t time_us, uint8_t type, uint8_t length);
+
+void warn(const char* user_msg);
+void faultGuard();
+[[noreturn]] void faultHandler(const char* user_msg);
+
+
+/*******************************************************************************
+ * SHARED VARIABLES
+ ******************************************************************************/
+
+
+// IPC message queue from Core1 to Core0
+QueueHandle_t g_fullBufferQueue;
+
+portMUX_TYPE g_bufferMux = portMUX_INITIALIZER_UNLOCKED;
+// Directly accessed shared variables
+std::atomic<uint8_t> g_writeSkips(0);
+
+// indirectly shared variables
+uint8_t g_fillIndex;
+BufferState_t g_bufferState[2];
+LogBuffer g_buffers[2];
+
+
+portMUX_TYPE g_faultMux = portMUX_INITIALIZER_UNLOCKED;
+// Directly accessed shared variables
+std::atomic<bool> g_faulted(false);
+
+
+TaskHandle_t g_sensorTaskHandle = nullptr;
+TaskHandle_t g_sdCardHandle = nullptr;
+
+HardwareSerial& serial0 = Serial;
+
+
+/*******************************************************************************
+ * CORE 0 DECLARATIONS
+ ******************************************************************************/
+
+
+/* Data writing core scope */
+namespace core0 {
+  // SPI buses are separate for two reasons:
+  // 1) The SD card breakout board controls the MISO pin even with CS pin high,
+  //    which causes interference with the ADC if they share an SPI bus.
+  // 2) Each core has its own SPI bus to avoid contention and allow for true
+  //    parallelism between ADC reads and SD card writes.
+  SPIClass sdSpi(HSPI);
+
+  // ESP32 SDFS library, not the Arduino SD library
+  fs::SDFS& sd = SD;
+  File logFile;
+  File metadataFile;
+
+  bool initGPIO();
+  bool initSPI();
+  
+  bool initSDCard();
+  bool initSDFiles();
+
+  bool drainBufferToSD(uint8_t bufferIndex);
+  bool writeBuffer(const uint8_t* buffer, size_t len);
+  bool writeMetadata();
+}
+
+
+/*******************************************************************************
+ * CORE 1 DECLARATIONS
+ ******************************************************************************/
+
+/* Data acquisition core scope */
+namespace core1 {
+
+  // Flag for synchronized start with Core0
+  bool core0Ready = false;
+
+  // Flag to skip sampling ADC1
+  bool ADC1NotPresent = false;
+
+  // Signal to rotate the current active buffer in Core1
+  bool activeBufferFull = false;
+
+  TwoWire& i2c = Wire;
+  SPIClass adcSpi(VSPI);
+
+  ADS1256 adc0(
+    PIN_ADC0_SPI_DRDY,
+    ADS1256::PIN_UNUSED,
+    ADS1256::PIN_UNUSED,
+    PIN_ADC0_SPI_CS,
+    ADS1256_VREF,
+    &adcSpi
+  );
+  Adafruit_NAU7802 adc1;
+
+  bool initGPIO();
+  bool initSPI();
+  bool initI2C();
+
+  bool initADC0();
+  bool initADC1();
+  bool testADC0();
+
+  bool readADC0();
+  bool readADC1();
+
+  bool pushRecord(uint64_t time_us, uint8_t type, const uint8_t* frame,
+                        size_t len);
+  bool tryRotateBuffer();
+}
+
+
+/*******************************************************************************
+ * CORE 1 SETUP
+ ******************************************************************************/
+
+
+void setup() {
+  g_sensorTaskHandle = xTaskGetCurrentTaskHandle();
+
+  // define initial buffer state
+  g_fillIndex = 0;
+  g_buffers[0].used = 0;
+  g_buffers[1].used = 0;
+  g_bufferState[0] = BufferState_t::BUFFER_FILLING;
+  g_bufferState[1] = BufferState_t::BUFFER_FREE;
+
+  // Serial must be initialized as early as possible
+  serial0.begin(SERIAL_BAUD_RATE);
+
+  if (xPortGetCoreID() != SENSOR_TASK_CORE) {
+    // should never happen, but just in case
+    faultHandler("Arduino task is not using core 1");
+  }
+
+  if (!core1::initGPIO()) {
+    faultHandler("Core 1 GPIO initialization failed");
+  }
+  if (!core1::initSPI()) {
+    faultHandler("Core 1 SPI initialization failed");
+  }
+  if (!core1::initI2C()) {
+    faultHandler("Core 1 I2C initialization failed");
+  }
+  if (!core1::initADC0()) {
+    faultHandler("Core 1 ADC0 initialization failed");
+  }
+  if (!core1::testADC0()) {
+    faultHandler("Core 1 ADC0 did not pass bus-fault test");
+  }
+  if (!core1::initADC1()) {
+    warn("Continuing without ADC1...");
+    core1::ADC1NotPresent = true;
+    //faultHandler("Core 1 ADC1 initialization failed");
+  }
+  
+  g_fullBufferQueue = xQueueCreate(2, sizeof(uint8_t));
+  if (g_fullBufferQueue == nullptr) {
+    faultHandler("IPC Queue initialization failed");
+  }
+
+  BaseType_t xReturned = xTaskCreatePinnedToCore(
+    sdWriterTask,
+    "sdWriterTask",
+    SD_CARD_TASK_STACK_SIZE,
+    nullptr,
+    SD_CARD_TASK_PRIORITY,
+    &g_sdCardHandle,
+    SD_CARD_TASK_CORE
+  );
+  if (xReturned != pdPASS) {
+    faultHandler("Failed to create Core 0 task");
+  }
+}
+
+
+/*******************************************************************************
+ * CORE 1 LOOP
+ ******************************************************************************/
+
+
+void loop() {
+  if (!core1::core0Ready) {
+    // RTOS notification is used to block Core1 until Core0 initialization
+    // is complete.
+    //
+    // Value of notification is meaningless in this context.
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    core1::core0Ready = true;
+  }
+
+  faultGuard();
+
+  // ADC, sensor reading goes here
+
+  // TODO: handle ADC read errors
+  // At present code will continue as normal and just skip writes if there are
+  // ADC read errors, but we may want to implement more robust error handling.
+  // Returned errors must distinguish from "sensor not yet available" and
+  // "sensor reading failed".
+  (void)core1::readADC0();
+  if (!core1::ADC1NotPresent) {
+    (void)core1::readADC1();
+  }
+
+  if (core1::activeBufferFull) {
+    core1::activeBufferFull = !core1::tryRotateBuffer();
+  }
+  
+  // EXTI EVENT_START goes here?
+
+  //vTaskDelay(pdMS_TO_TICKS(1));
+}
+
+
+/*******************************************************************************
+ * CORE 0 TASK
+ ******************************************************************************/
+
+
+void sdWriterTask(void* pvParameters) {
+
+  (void)pvParameters; // unused parameter
+
+  /* TASK SETUP */
+
+  if (!core0::initGPIO()) {
+    faultHandler("Core 0 GPIO initialization failed");
+  }
+  if (!core0::initSPI()) {
+    faultHandler("Core 0 SPI initialization failed");
+  }
+  if (!core0::initSDCard()) {
+    faultHandler("Core 0 SD card initialization failed");
+  }
+  if (!core0::initSDFiles()) {
+    faultHandler("Core 0 SD card file initialization failed");
+  }
+
+  // Signal to Core1 that initialization is complete
+  BaseType_t xReturned = xTaskNotifyGive(g_sensorTaskHandle);
+
+  LOGGER_ASSERT(xReturned == pdPASS,
+                "xTaskNotifyGive did not return expected value");
+
+  /* TASK LOOP */
+  for (;;) {
+    uint8_t bufferIndex = 0;
+
+    faultGuard();
+
+    // other LED indicators go here (SD card activity, errors, etc)
+    blink();
+
+    // block until buffer is filled by core1 and handed to core0
+    if (xQueueReceive(g_fullBufferQueue, &bufferIndex, portMAX_DELAY)
+        == pdTRUE) {
+          
+      LOGGER_ASSERT(g_fullBufferQueue != NULL,
+                    "IPC message queue became NULL");
+      LOGGER_ASSERT(bufferIndex == 0 || bufferIndex == 1,
+                    "Core 0 received invalid buffer index");
+
+      // drainBufferToSD handles errors internally
+      (void)core0::drainBufferToSD(bufferIndex);
+    }
+    
+    //vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
+
+/*******************************************************************************
+ * INITIALIZATION FUNCTIONS 
+ ******************************************************************************/
+
+
+bool core0::initGPIO() {
+  /* Initialize GPIO pins */
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(PIN_EXTLED1, OUTPUT);
+  pinMode(PIN_EXTLED2, OUTPUT);
+  // pin `PIN_SD_SPI_CS` is controlled by the SD library
+
+  /* Define initial states */
+  digitalWrite(LED_BUILTIN, LOW);
+  digitalWrite(PIN_EXTLED1, LOW);
+  digitalWrite(PIN_EXTLED2, HIGH);
+  
+  return true;
+}
+
+bool core0::initSPI() {
+  sdSpi.begin(PIN_SD_SPI_SCK, PIN_SD_SPI_MISO, PIN_SD_SPI_MOSI);
+  return true;
+}
+
+bool core0::initSDCard() {
+  return sd.begin(PIN_SD_SPI_CS, sdSpi);
+}
+
+bool core0::initSDFiles() {
+  logFile = sd.open(LOG_FILENAME, FILE_WRITE, true);
+  if (!logFile) {
+    return false;
+  }
+  #ifdef USE_METADATA_FILE
+    metadataFile = sd.open(METADATA_FILENAME, FILE_WRITE, true);
+    return !!metadataFile;
+  #else
+    return true;
+  #endif
+}
+
+bool core1::initGPIO() {
+  /* Initialize GPIO pins */
+  // pin `PIN_ADC0_SPI_CS` is controlled by the ADS1256 library
+  // pin `PIN_ADC0_SPI_DRDY` is controlled by the ADS1256 library
+
+  /* Define initial states */
+  
+  return true;
+}
+
+bool core1::initSPI() {
+  adcSpi.begin(PIN_ADC0_SPI_SCK, PIN_ADC0_SPI_MISO, PIN_ADC0_SPI_MOSI);
+  return true;
+}
+
+bool core1::initI2C() {
+  return i2c.begin(PIN_ADC1_I2C_SDA, PIN_ADC1_I2C_SCL);
+}
+
+bool core1::initADC0() {
+  adc0.InitializeADC();
+  adc0.setDRATE(DRATE_30000SPS);
+  adc0.setPGA(PGA_1);
+
+  return true;
+}
+
+bool core1::initADC1() {
+  return adc1.begin(&i2c);
+}
+
+bool core1::testADC0() {
+  // Previous failure modes for the ADS1256 were caused by SPI faults resulting
+  // in the received bits on MISO to be all 0 or 1. This typically materialized
+  // as readings being either 0 or -1 (0xFFFFFFFF one's complement).
+  // 
+  // This test checks for the aforementioned failure mode by seeing if all
+  // received values are just 0 or -1.
+
+  int badTransmissionCount = 0;
+
+  adc0.setMUX(SING_0);
+  for (int i = 0; i < 10; i++) {
+    int32_t conversion = adc0.readSingle();
+    if ( (conversion == static_cast<int32_t>(0x00000000L))
+      || (conversion == static_cast<int32_t>(0xFFFFFFFFL)) ) {
+      
+      badTransmissionCount++;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  return badTransmissionCount < 9;
+}
+
+
+/*******************************************************************************
+ * CORE 0 FUNCTION DEFINITIONS
+ ******************************************************************************/
+
+
+bool core0::drainBufferToSD(uint8_t bufferIndex) {
+  portENTER_CRITICAL(&g_bufferMux);
+  BufferState_t bufferState = g_bufferState[bufferIndex];
+
+  LOGGER_ASSERT(bufferState == BufferState_t::BUFFER_FULL,
+                "Buffer state not BUFFER_FULL after swap");
+
+  g_bufferState[bufferIndex] = BufferState_t::BUFFER_DRAINING;
+  portEXIT_CRITICAL(&g_bufferMux);
+
+  LOGGER_ASSERT(g_bufferState[(bufferIndex+1)%2] != BufferState_t::BUFFER_DRAINING,
+                "Both buffers are draining at the same time");
+
+  LogBuffer* buf = &g_buffers[bufferIndex];
+
+  LOGGER_ASSERT(buf->used <= LOG_BUFFER_SIZE, "Buffer exceeded max size");
+  LOGGER_WARN_IF(buf->used == 0, "Core 0 Received empty buffer");
+  
+  if (!core0::writeBuffer(buf->data, buf->used)) {
+    faultHandler("SD card write transaction encountered a problem");
+  }
+
+  // DO NOT CHANGE THIS CODE!
+  // This code section can only exist here. `BUFFER_FREE` must always
+  // be assigned with `buf->used = 0`.
+  portENTER_CRITICAL(&g_bufferMux);
+  buf->used = 0;
+  g_bufferState[bufferIndex] = BufferState_t::BUFFER_FREE;
+  portEXIT_CRITICAL(&g_bufferMux);
+  return true;
+}
+
+
+bool core0::writeBuffer(const uint8_t* buffer, size_t len) {
+  LOGGER_ASSERT(buffer != nullptr, "Attempted to write null pointer");
+  LOGGER_ASSERT(len <= LOG_BUFFER_SIZE, "Buffer exceeded max size");
+
+  digitalWrite(PIN_EXTLED2, HIGH);
+  size_t written = logFile.write(buffer, len);
+  if (written != len) {
+    digitalWrite(PIN_EXTLED2, LOW);
+    return false;
+  }
+  logFile.flush();
+  digitalWrite(PIN_EXTLED2, LOW);
+
+  return true;
+}
+
+bool core0::writeMetadata() {
+  // TODO: develop metadata format
+  return true;
+}
+
+
+/*******************************************************************************
+ * CORE 1 FUNCTION DEFINITIONS
+ ******************************************************************************/
+
+
+bool core1::tryRotateBuffer() {
+  portENTER_CRITICAL(&g_bufferMux);
+  // locally store buffer indices
+  uint8_t fullIndex = g_fillIndex;
+  uint8_t nextIndex = (g_fillIndex + 1) % 2;
+
+  if (g_bufferState[nextIndex] != BufferState_t::BUFFER_FREE) {
+    // buffer is not free, skip this write
+    g_writeSkips++;
+    portEXIT_CRITICAL(&g_bufferMux);
+    if (g_writeSkips > MAX_ROTATION_SKIPS) {
+      faultHandler("Too many failed rotation tries");
+    }
+    return false;
+  }
+  g_writeSkips = 0;
+
+  LOGGER_ASSERT(g_bufferState[fullIndex] == BufferState_t::BUFFER_FILLING,
+                "Current filling buffer is not in valid state");
+
+  // rotate buffers
+  g_bufferState[fullIndex] = BufferState_t::BUFFER_FULL;
+  g_bufferState[nextIndex] = BufferState_t::BUFFER_FILLING;
+  g_fillIndex = nextIndex; // rotate buffer index
+  portEXIT_CRITICAL(&g_bufferMux);
+
+  // signal core0 that a buffer is full and ready to write
+  if (xQueueSend(g_fullBufferQueue, &fullIndex, 0) != pdTRUE) {
+    faultHandler("xQueueSend failed to post full-buffer index during rotation due to full queue");
+  }
+
+  return true;
+}
+
+bool core1::readADC0() {
+  // Note:
+  //
+  // - the ADS1256 uses continuous conversion mode. If another peripheral
+  //   is using the same SPI bus, we need to stop the conversion to release the
+  //   bus using `adc0.stopConversion()`. Note that this will cause the sample
+  //   phase of AIN7 to shift (known issue). See library documentation.
+  // 
+  // - The ADS1256 channel mux takes some time to switch between channels, and 
+  //   post-processing must consider the added time offset of each conversion
+  //   after the timestamp is taken. I.e. the conversion time of AIN7 is
+  //   7*0.44ms = 3.08ms after the timestamp.
+  //
+  int32_t frame[ADC0_FRAME_SIZE];
+  uint64_t time_us = esp_timer_get_time();
+
+  for (int i = 0; i < 8; i++) {
+    frame[i] = adc0.cycleSingle();
+  }
+  
+  return pushRecord(time_us, ADC0_DATA_ID,
+                      reinterpret_cast<const uint8_t*>(frame), sizeof(frame));
+}
+
+bool core1::readADC1() {
+  if (!adc1.available()) {
+    return false;
+  }
+
+  int32_t frame[ADC1_FRAME_SIZE];
+  uint64_t time_us = esp_timer_get_time();
+  
+  if (!adc1.setChannel(0)) {
+    return false;
+  }
+  frame[0] = adc1.read();
+
+  if (!adc1.setChannel(1)) {
+    return false;
+  }
+  frame[1] = adc1.read();
+
+  return pushRecord(time_us, ADC1_DATA_ID,
+                      reinterpret_cast<const uint8_t*>(frame), sizeof(frame));
+}
+
+bool core1::pushRecord(uint64_t time_us, uint8_t type,
+                             const uint8_t* frame, size_t len) {
+
+  const size_t recordSize = sizeof(uint64_t) + len;
+
+  portENTER_CRITICAL(&g_bufferMux);
+  const uint8_t currentFillIndex = g_fillIndex;
+
+  LOGGER_ASSERT(currentFillIndex == 0 || currentFillIndex == 1,
+                "Core 0 received invalid buffer index");
+
+  const BufferState_t fillState = g_bufferState[currentFillIndex];
+  portEXIT_CRITICAL(&g_bufferMux);
+
+  LOGGER_ASSERT(fillState == BufferState_t::BUFFER_FILLING,
+                "Current filling buffer is not in valid state");
+
+  LogBuffer* buf = &g_buffers[currentFillIndex];
+
+  // Prepare to rotate buffer if this write fills the buffer past threshold
+  core1::activeBufferFull = (buf->used + recordSize >= LOG_WRITE_THRESHOLD);
+
+  // buffer is full
+  if (buf->used + recordSize > LOG_BUFFER_SIZE) {
+    return false;
+  }
+
+  // Write header and frame to buffer
+  uint64_t header = makeHeader(time_us, type, len);
+  for (size_t i = 0; i < sizeof(uint64_t); i++) {
+    buf->data[buf->used++] = static_cast<uint8_t>((header >> (i*8)) & 0xFF);
+  }
+  for (size_t i = 0; i < len; i++) {
+    buf->data[buf->used++] = frame[i];
+  }
+
+  LOGGER_ASSERT(buf->used <= LOG_BUFFER_SIZE, "Buffer exceeded max size");
+
+  return true;
+}
+
+
+/*******************************************************************************
+ * HELPER FUNCTION DEFINITIONS
+ ******************************************************************************/
+
+
+/* Heartbeat indication */
+void blink() {
+  static uint32_t last_led_on = 0;
+  static bool led_on = false;
+
+  constexpr uint32_t PERIOD_MS = 2000;
+  constexpr uint32_t WIDTH_MS = 250;
+
+  uint32_t now_ms = millis();
+
+  if ((now_ms - last_led_on >= PERIOD_MS) && !led_on) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    last_led_on = now_ms;
+    led_on = true;
+  }
+  if ((now_ms - last_led_on >= WIDTH_MS) && led_on) {
+    digitalWrite(LED_BUILTIN, LOW);
+    led_on = false;
+  }
+}
+
+uint64_t makeHeader(uint64_t time_us, uint8_t type, uint8_t length) {
+  return (time_us & 0x0000FFFFFFFFFFFFULL)
+       | (static_cast<uint64_t>(type) << 48)
+       | (static_cast<uint64_t>(length) << 56);
+}
+
+void warn(const char* user_msg) {
+  serial0.print("WARN: ");
+  serial0.println(user_msg);
+  serial0.flush();
+}
+
+void faultGuard() {
+  portENTER_CRITICAL(&g_faultMux);
+  if (g_faulted) {
+    portEXIT_CRITICAL(&g_faultMux);
+    for (;;) {
+      _NOP();
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    // no return
+  }
+  portEXIT_CRITICAL(&g_faultMux);
+}
+
+[[noreturn]] void faultHandler(const char* user_msg) {
+  LOGGER_ASSERT(user_msg != nullptr, "Fault message was a null pointer");
+
+  portENTER_CRITICAL(&g_faultMux);
+  bool first = !g_faulted;
+  g_faulted = true;
+  portEXIT_CRITICAL(&g_faultMux);
+  
+  if (first) {
+    serial0.print("FAULT: ");
+    serial0.println(user_msg);
+    serial0.flush();
+    digitalWrite(LED_BUILTIN, LOW);
+    digitalWrite(PIN_EXTLED1, HIGH);
+    digitalWrite(PIN_EXTLED2, LOW);
+  }
+
+  // TODO: is there something better to do when we hit a fault?
+  
+  vTaskDelay(pdMS_TO_TICKS(5000));
+
+  esp_restart();
+  
+  for (;;) {} // should never reach here
+}
+
+// "Many ethernet cables died to bring us this information"
