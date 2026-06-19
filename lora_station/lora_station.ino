@@ -1,6 +1,3 @@
-/*
-Added sync, fixed compilation bus
-*/
 const uint8_t ignitionCode = 27;
 
 #include <RadioLib.h>
@@ -274,7 +271,6 @@ void setup() {
 
   sendSyncSignal();   // for syncing other devices, raises a pin low-high-low
 
-  // end of Son's relays
   logEvent("System Boot");
 }
 

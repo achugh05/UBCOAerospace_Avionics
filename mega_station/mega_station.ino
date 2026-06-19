@@ -1,15 +1,3 @@
-/* There appear to be no issues if a servo is at position "255 255". Encoder can track direction, although we cannot yet send controls for angles "below" zero.
-Rev P6 - Added support for pressure load cells, logs for five seconds after ignition
-Rev P7 - fixed valve light update functions
-- removed unused transmission errors
-- added command 17
-Rev P8 - added comments, reorganized some functions, updated print statements
-- removed flush from logEvent()
-- removed psi > 1600 limit
-- added timestamp to logLoadCell()
-- integrated buildPacket into sendPacket (now sendTelemetryPacket)
-*/
-
 #include <Encoder.h>
 #include <SPI.h>
 #include <SD.h>
@@ -19,7 +7,7 @@ Rev P8 - added comments, reorganized some functions, updated print statements
 #define NUM_PRESSURES 3
 const int telemetryLength = 5 + NUM_SERVOS * 2 + NUM_PRESSURES * 2 + 2;
 
-#define ID_PIN 22    //if pin high, manifold 1. if low, manifold 2
+#define ID_PIN 22    //if pin high, manifold 1. if low, manifold 2    //default is high
 #define SD_CS 53    //for sd card
 File dataFile;
 
@@ -34,8 +22,6 @@ HardwareSerial& loraSerial = Serial1;   //RX1 (19), TX1 (18)
 
 unsigned long lastTelemetrySend = 0;
 unsigned long lastLoggedEvent = 0;
-long ignitionTime = 0;
-const int burntime = 5000;
 
 // ---------------- PRESSURE CALIBRATION ----------------
 const int V1_mV = 500;
@@ -52,10 +38,6 @@ const int loadCellPressurePins[3] = {A4, A5, A6};
 
 float pressure_caliA[NUM_PRESSURES] = {A, A, A};
 float pressure_caliB[NUM_PRESSURES] = {B, B, B};
-float loadcell_caliA[3] = {A, A, A};
-float loadcell_caliB[3] = {B, B, B};
-
-
 
 
 // common - computes the CRC8 byte for a given array
@@ -75,7 +57,6 @@ uint8_t computeCRC8(uint8_t* data, int length) {
 }
 
 // ================== LOGGING =============================
-// common - used to give an explanation for events in the log
 // common - used to give an explanation for events in the log
 void logEvent(String message) {
   if (dataFile) {
@@ -115,7 +96,7 @@ void logPacket(uint8_t* packet, int length) {
 }
 
 //---------------INITIALIZING------------------------------
-// common - initializes SD module and creates a unique file
+// initializes SD module and creates a unique file
 void initializeDatalogging() {
   if (!SD.begin(SD_CS)) {
     Serial.println("SD init failed! NO LOGGING.");
@@ -135,8 +116,9 @@ void initializeDatalogging() {
   dataFile = SD.open(filename, FILE_WRITE);
 
   if (dataFile) {
-    dataFile.print("Created file number ");
-    dataFile.println(fileIndex);
+    logEvent("Created file number " + String(fileIndex));
+  } else {
+      Serial.println("Issue with file.");
   }
 }
 
@@ -232,9 +214,9 @@ public:
 };
 
 RexServo servos[NUM_SERVOS] = {
-  RexServo(26, 27, 6, 5),     // encoder A, B, PWM A, B
+  RexServo(30, 31, 10, 9),     // encoder A, B, PWM A, B
   RexServo(28, 29, 8, 7),
-  RexServo(30, 31, 10, 9)
+  RexServo(26, 27, 12, 11)
 };
 
 // ---------------- PRESSURE FUNCTIONS ----------------
@@ -248,23 +230,6 @@ void readPressure() {   // reads through the array of pressures sensors
 
     pressures[i] = (uint16_t)psi;
   }
-}
-
-// used only for static fire
-// cycles through each pressure sensor being used for the load cell and logs the pressure for later thrust calculations
-void logLoadCell() {
-  dataFile.print(millis());   //timestamp
-  dataFile.print(",327,");   // arbitrary command value for ease of data parsing
-  for (int i = 0; i < 3; i++) {
-    int raw = analogRead(loadCellPressurePins[i]);
-    long mV = (raw * 5000L) / 1023;   // 10-bit Mega ADC
-
-    float psi = (float)loadcell_caliA[i] * mV + loadcell_caliB[i];
-
-    dataFile.print(psi);
-    dataFile.print(",");
-  }
-  dataFile.println();
 }
 
 
@@ -305,7 +270,6 @@ void handleLoraInput() {
 
 // handles any commands given over UART from the Lora
 void handleLoraPacket(uint8_t* packet, int length) {
-  logEvent("Lora packet below:");
   logPacket(packet, length);
   uint8_t command = packet[4];
 
@@ -318,15 +282,6 @@ void handleLoraPacket(uint8_t* packet, int length) {
 
   switch (command) {
     uint16_t deg;
-
-    case 4:   // this case should be removed for non-static fires. It is used as a redundant thrust logger
-      logEvent("Ignition command. Beginning load cell pressures logging.");
-      ignitionTime = millis();
-      while (millis() - ignitionTime < burntime) { 
-        logLoadCell();
-        loop();   //untested, but it will make this nonblocking
-      }
-      break;
 
     case 9:   // change angle of servo
       int servoIndex = packet[5];
@@ -408,7 +363,7 @@ void sendCommandAck(uint8_t originalCommand, uint8_t faultRaised) {
   logPacket(packet, 9);
 }
 
-// common - sends error codes to the Lora
+// sends error codes to the Lora
 void sendError(int errorCommand) {
   uint8_t packet[7];
 
@@ -421,6 +376,7 @@ void sendError(int errorCommand) {
   packet[6] = FOOTER;
 
   loraSerial.write(packet, 7);      //send immediately
+  logPacket(packet, 7);
 }
 
 
@@ -432,11 +388,12 @@ void setup() {
   deviceConfig();             // determines if device is manifold 1 or 2
 
   for (int i = 0; i < NUM_SERVOS; i++)
-    servos[i].begin();        // initializes PWM pins and sets each encoder to 0, 
+    servos[i].begin();        // initializes PWM pins and sets each encoder to 0
 
   initializeDatalogging();    // initializes SD Card
 
-  logEvent("System ready. Manifold ID: " + DEVICE_ID);
+  logEvent("System ready. Device ID: " + String(DEVICE_ID));
+  logEvent("Header,Version,Dest,Source,Command,Servo-0,Servo-0,Servo-1,Servo-1,Servo-2,Servo-2,Pres-0,Pres-0,Pres-1,Pres-1,Pres-2,Pres-2,CRC-8,Footer");
 }
 
 // ---------------- LOOP ----------------

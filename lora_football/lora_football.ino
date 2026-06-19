@@ -1,10 +1,6 @@
-/*
-removed sd card logging and unused variables
-*/
 #include <RadioLib.h>
 
 HardwareSerial loraSerial(1);   //UART bus declaration
-
 
 // ================== common - RADIO CONFIG ==================
 #define NSS    8
@@ -183,7 +179,7 @@ void sendRadioPacket(uint8_t* lastPacket, int length) {
   radio.startReceive();
 }
 
-// common - sends error codes to the Lora
+// sends error codes to the Lora
 void sendError(int errorCommand) {
   uint8_t packet[7];
 
@@ -198,60 +194,6 @@ void sendError(int errorCommand) {
   loraSerial.write(packet, 7);      //send immediately
 }
 
-// for manual commands and debugging, uncomment these functions
-// void handleManualSerial() {   // meant only for debugging
-//   if (!Serial.available()) return;
-
-//   String s = Serial.readStringUntil('\n');
-//   s.trim();
-
-//   uint8_t packet[32];
-//   int idx = 0;
-//   int startIdx = 0;
-
-//   while (startIdx < s.length() && idx < 32) {
-//     int spaceIdx = s.indexOf(' ', startIdx);
-//     String token;
-
-//     if (spaceIdx != -1) {
-//       token = s.substring(startIdx, spaceIdx);
-//       startIdx = spaceIdx + 1;
-//     } else {
-//       token = s.substring(startIdx);
-//       startIdx = s.length();
-//     }
-
-//     packet[idx++] = (uint8_t) token.toInt();
-//   }
-
-//   logEvent("Manual packet below:");
-//   sendManualSerial(packet, idx);
-// }
-
-// // ---------------- PACKET BUILD ----------------
-// void sendManualSerial(uint8_t* payload, int length) {
-//   // length = number of bytes you entered, excluding CRC and footer
-//   uint8_t packet[length + 2]; // +1 for CRC, +1 for FOOTER
-
-//   // Copy payload
-//   for (int i = 0; i < length; i++) {
-//     packet[i] = payload[i];
-//   }
-
-//   // Compute CRC over payload
-//   packet[length] = computeCRC8(packet, length); // CRC8 byte
-//   packet[length + 1] = FOOTER;                  // Footer
-
-//   int fullLength = length + 2; // full packet length including CRC and footer
-
-//   // Check validity of full packet
-//   if (checkPacketValidity(packet, fullLength)) {
-//     sendRadioPacket(packet, fullLength);
-//   } else {
-//     logEvent("The manual packet below is invalid and not sent:");
-//     printPacket(packet, fullLength);
-//   }
-// }
 
 // ========================================================
 // ====================== SETUP ===========================
@@ -274,6 +216,5 @@ void setup() {
 // ========================================================
 void loop() {     
   handleMegaInput();  
-  // handleManualSerial();    // for sending serial commands    // enter all fields except crc8 and footer
   handleRadioReceive();
 }

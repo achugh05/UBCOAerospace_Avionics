@@ -1,8 +1,4 @@
 /*
-fixed error lights reset
-updated error code definitions - refer to AV-104
-  dedicated light2 to connectivity
-
 Note: if switches are armed and open on power-up, they will send the valve-open command
 */
 
@@ -28,7 +24,8 @@ const uint8_t ignitionCode = 27;
 #define LED_PIN1 42
 #define IGNITION_LED_PIN 44
 #define ERROR_LED_PIN 45
-#define ERROR_BUTTON0 47
+#define ERROR_BUTTON1 47
+// #define ERROR_BUTTON0 46
 #define IGNITION_PIN 4
 #define IGNITION_ARM_PIN 6
 #define NUM_IGNITION_PIXELS 2
@@ -57,11 +54,11 @@ uint8_t MANIFOLD2 = 2;
 
 unsigned long lastLoggedEvent = 0;
 unsigned long lastReceivedPacketTime;
-const int connectivityTimeout = 8000;
+const int connectivityTimeout = 9000;
 bool connectivityError = false;
 const int commandLength = 10;   //max command length (3 bytes of payload)
 unsigned long lastCheck = 0;
-int maxAcceptableDelay = 5000;                // self test - max time to wait for a command before flagging an error
+int maxAcceptableDelay = 9000;                // self test - max time to wait for a command before flagging an error
 
 
 // arrays for states
@@ -84,6 +81,8 @@ uint8_t lastErrorButtonState = HIGH;
 unsigned long lastErrorButtonTime = 0;
 
 unsigned long lastIgnitionArmState = 0;       // for ignition arming
+
+bool selfTestAbort = false;   //to escape self-test mode
 
 // pressure displays setup
 const int displayDIOs[] = {10, 11, 9, 12};
@@ -134,7 +133,7 @@ void printPacket(uint8_t* packet, int telemetryLength) {
 // uncommon - logs packets to SD card
 // also writes to mini PC for parsing
 void logPacket(uint8_t* packet, int length) {
-  Serial.write(packet, length);   // for parsing by the mini PC
+  // Serial.write(packet, length);   // for parsing by the mini PC
   if (dataFile) {
     dataFile.print(millis());
     dataFile.print(",");
@@ -153,7 +152,7 @@ void logPacket(uint8_t* packet, int length) {
 }
 
 //---------------INITIALIZING------------------------------
-// uncommon - initializes SD module and creates a unique file
+// initializes SD module and creates a unique file
 void initializeDatalogging() {
   if (!SD.begin(SD_CS)) {
     Serial.println("SD init failed! NO LOGGING.");
@@ -173,8 +172,9 @@ void initializeDatalogging() {
   dataFile = SD.open(filename, FILE_WRITE);
 
   if (dataFile) {
-    dataFile.print("Created file number ");
-    dataFile.println(fileIndex);
+    logEvent("Created file number " + String(fileIndex));
+  } else {
+      Serial.println("Issue with file.");
   }
 }
 
@@ -214,16 +214,17 @@ void initializeIgnitionPanel() {
 
 // initialize ignition button, error leds clear
 void initializeErrorPanel() {
-  pinMode(ERROR_BUTTON0, INPUT_PULLUP);
+  // pinMode(ERROR_BUTTON0, INPUT_PULLUP);
+  pinMode(ERROR_BUTTON1, INPUT_PULLUP);
   errorLEDs.begin();
   errorLEDs.clear();
   errorLEDs.show();
 
   // if error button is held down during power up, starts a self test
   // by only enabling the selfTest() function to be called during powerup, it cannot be accidentally run during normal operation
-  if (digitalRead(ERROR_BUTTON0) == LOW) {     // check if a self test should be run
+  if (digitalRead(ERROR_BUTTON1) == LOW) {     // check if a self test should be run
     delay(500);
-    if (digitalRead(ERROR_BUTTON0) == LOW)   // ensure it wasn't an accident
+    if (digitalRead(ERROR_BUTTON1) == LOW)   // ensure it wasn't an accident
       selfTest();     // execute self test
   }
 }
@@ -302,7 +303,7 @@ void checkIgnitionPanel() {
 // checks the error panel and updates the lights. One button/three lights
 // One button is used as error reset
 void checkErrorPanel() {
-  uint8_t current = digitalRead(ERROR_BUTTON0);    // read error button pin to determine if pressed
+  uint8_t current = digitalRead(ERROR_BUTTON1);    // read error button pin to determine if pressed
 
   if (current != lastErrorButtonState && (millis() - lastErrorButtonTime > DEBOUNCE_MS)) {    // debounce button
     lastErrorButtonTime = millis();      // update last time button was pressed
@@ -399,12 +400,11 @@ void handleLoraInput() {
 void handleLoraPacket(uint8_t* packet, int length) {
   lastReceivedPacketTime = millis();
   errorLEDs.setPixelColor(2, errorLEDs.Color(0, 255, 0));
-  logEvent("Lora packet below:");
   logPacket(packet, length);
   uint8_t command = packet[4];
   int idx = 5;
 
-  if (packet[2] != DEVICE_ID) {   //if DEST_ID doesn't equal this manifold
+  if (packet[2] != DEVICE_ID) {   //if DEST_ID doesn't equal this device
     logEvent("Packet above not meant for me. Maybe later.");
     return;
   }
@@ -561,6 +561,10 @@ void selfTest() {
   int successfulServos = 0;   // used to track successful openings and closings
 // opening each servo and waiting for acknowledgment, then closing
   for (int i=0; i<NUM_SERVOS; i++) {
+    if (selfTestAbort) {
+      logEvent("Self-test aborted.");
+      return;
+    }
     if (testMoveServo(i, 90))
       successfulServos++;
     if (testMoveServo(i, 0))
@@ -585,6 +589,8 @@ void selfTest() {
 // sends command to move a servo to a specified angle
 // waits the maxAcceptableDelay for acknowledgement or raises an error
 bool testMoveServo(int servo, int angle) {
+  if (selfTestAbort)
+    return false;
   uint8_t payload[3] = {servo, 0, angle} ;   // servo, angle in two bytes (to ninety degrees)
   sendCommandPacket(MANIFOLD1, 9, payload);   // manifold, command (move servo), payload
   bool connectionTimedOut = true;     // initialize with true, change to false if successful contact made
@@ -595,7 +601,14 @@ bool testMoveServo(int servo, int angle) {
       connectionTimedOut = false;
       break;
     }
-    delay(2);
+    if (digitalRead(ERROR_BUTTON1) == LOW) {    //for abort
+      delay(300);
+      if (digitalRead(ERROR_BUTTON1) == LOW) {    //confirm abort
+        selfTestAbort = true;             //set global variable
+        return false;
+      }
+    }
+    delay(10);
   }
 
   if (connectionTimedOut) {
@@ -665,7 +678,8 @@ void setup() {
       // error panel is last to initialize as it can enable a self test
 
   lastReceivedPacketTime = millis();      // to use in detecting connectivity errors
-  logEvent(String("System ready. DEVICE_ID: ") + DEVICE_ID);
+  logEvent("System ready. Device ID: " + String(DEVICE_ID));
+  logEvent("Header,Version,Dest,Source,Command,Servo-0,Servo-0,Servo-1,Servo-1,Servo-2,Servo-2,Pres-0,Pres-0,Pres-1,Pres-1,Pres-2,Pres-2,CRC-8,Footer");
 }
 
 // ---------------- LOOP ----------------
