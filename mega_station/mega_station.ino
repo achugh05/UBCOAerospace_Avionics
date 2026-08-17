@@ -1,6 +1,8 @@
 #include <Encoder.h>
 #include <SPI.h>
 #include <SD.h>
+#include <OneWire.h>    //required for DallasTemperature
+#include <DallasTemperature.h>    //tempSensor ds18b20
 
 // ---------------- SYSTEM CONFIG ----------------
 #define NUM_SERVOS 3
@@ -19,6 +21,9 @@ uint8_t DEVICE_ID;
 
 HardwareSerial& loraSerial = Serial1;   //RX1 (19), TX1 (18)
 
+#define tempSensor_PIN 32    //tempSensor requires only one digital pin
+OneWire oneWire(tempSensor_PIN);    //for communication with tempSensor
+DallasTemperature tempSensor(&oneWire);  //pass ref to DallasTemperature library
 
 unsigned long lastTelemetrySend = 0;
 unsigned long lastLoggedEvent = 0;
@@ -214,12 +219,13 @@ public:
 };
 
 RexServo servos[NUM_SERVOS] = {
-  RexServo(30, 31, 10, 9),     // encoder A, B, PWM A, B
+  RexServo(26, 27, 6, 5),
   RexServo(28, 29, 8, 7),
-  RexServo(26, 27, 12, 11)
+  RexServo(30, 31, 10, 9),
+  // encoder A, B, PWM A, B
 };
 
-// ---------------- PRESSURE FUNCTIONS ----------------
+// ---------------- PRESSURE AND TEMP FUNCTIONS ----------------
 void readPressure() {   // reads through the array of pressures sensors
   for (int i = 0; i < NUM_PRESSURES; i++) {
     int raw = analogRead(pressurePins[i]);      //gathers the raw reading (10 bit number)
@@ -232,6 +238,18 @@ void readPressure() {   // reads through the array of pressures sensors
   }
 }
 
+uint8_t getTemp() {
+  // Send the command to perform a temperature conversion:
+  tempSensor.requestTemperatures();
+
+  // Fetch the temperature in degrees Celsius for device index:
+  float tempC = tempSensor.getTempCByIndex(0); // the index 0 refers to the first device}
+  return (uint8_t) (tempC + 100);
+  //returns tempC + 100  to allow for values -100 to 155 to be transmitted
+  //otherwise, all values below 0 will be wrong.
+    //sensor operating range -55 to +125C
+    //correction to temp will be made before displaying with mega_football
+}
 
 // ---------------- RECEIVE ----------------
 // parses UART input from the Lora
@@ -335,13 +353,15 @@ void sendTelemetryPacket() {
     packet[idx++] = pressures[i] & 0xFF;
   }
 
+  packet[idx++] = getTemp();
+
   uint8_t crc8 = computeCRC8(packet, idx);      // compute CRC of packet up to this point
   packet[idx++] = crc8;
   packet[idx++] = FOOTER;
 
   // relay to the Lora
-  loraSerial.write(packet, telemetryLength);
-  logPacket(packet, telemetryLength);
+  loraSerial.write(packet, idx);
+  logPacket(packet, idx);
 }
 
 // sends a packet to confirm which command was executed, and the error status
@@ -391,9 +411,9 @@ void setup() {
     servos[i].begin();        // initializes PWM pins and sets each encoder to 0
 
   initializeDatalogging();    // initializes SD Card
-
+  tempSensor.begin();         // initialize tempSensor
   logEvent("System ready. Device ID: " + String(DEVICE_ID));
-  logEvent("Header,Version,Dest,Source,Command,Servo-0,Servo-0,Servo-1,Servo-1,Servo-2,Servo-2,Pres-0,Pres-0,Pres-1,Pres-1,Pres-2,Pres-2,CRC-8,Footer");
+  logEvent("(Time)Header,Version,Dest,Source,Command,Servo-0,Servo-0,Servo-1,Servo-1,Servo-2,Servo-2,Pres-0,Pres-0,Pres-1,Pres-1,Pres-2,Pres-3,Temp,CRC-8,Footer");
 }
 
 // ---------------- LOOP ----------------

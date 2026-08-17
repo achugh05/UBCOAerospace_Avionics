@@ -434,17 +434,19 @@ void handleLoraPacket(uint8_t* packet, int length) {
         pressures[i] = ((uint16_t)packet[idx++] << 8) | packet[idx++];
         displays[i].showNumberDec(pressures[i]);
       }
+      
+      display3.showNumberDec(packet[idx++] - 100, true); //temp
       break;
 
     case 207:   //sd card query   //can't currently be sent to this device but code is here
       if (packet[5] == 2) {
-        display3.showNumberDec(packet[3]*1000 + 208);   //source_id + error code
+        display3.showNumberDec(packet[3]*1000 + 208, true);   //source_id + error code
         errorLEDs.setPixelColor(1, errorLEDs.Color(255, 255, 0));   //yellow
       }
       break;
 
     case 208:
-      display3.showNumberDec(packet[3]*1000 + 208);   //source_id + error code
+      display3.showNumberDec(packet[3]*1000 + 208, true);   //source_id + error code
       errorLEDs.setPixelColor(1, errorLEDs.Color(255, 255, 0));   //yellow
       break;
 
@@ -679,7 +681,7 @@ void setup() {
 
   lastReceivedPacketTime = millis();      // to use in detecting connectivity errors
   logEvent("System ready. Device ID: " + String(DEVICE_ID));
-  logEvent("Header,Version,Dest,Source,Command,Servo-0,Servo-0,Servo-1,Servo-1,Servo-2,Servo-2,Pres-0,Pres-0,Pres-1,Pres-1,Pres-2,Pres-2,CRC-8,Footer");
+  logEvent("(Time),Header,Version,Dest,Source,Command,Servo-0,Servo-0,Servo-1,Servo-1,Servo-2,Servo-2,Pres-0,Pres-0,Pres-1,Pres-1,Pres-2,Pres-2,Temp,CRC-8,Footer");
 }
 
 // ---------------- LOOP ----------------
