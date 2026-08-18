@@ -1,13 +1,12 @@
 #include <Encoder.h>
 #include <SPI.h>
 #include <SD.h>
-#include <OneWire.h>    //required for DallasTemperature
-#include <DallasTemperature.h>    //tempSensor ds18b20
+#include <DHT.h>
 
 // ---------------- SYSTEM CONFIG ----------------
 #define NUM_SERVOS 3
 #define NUM_PRESSURES 3
-const int telemetryLength = 5 + NUM_SERVOS * 2 + NUM_PRESSURES * 2 + 2;
+const int telemetryLength = 5 + NUM_SERVOS * 2 + NUM_PRESSURES * 2 + 1 + 2; //temp sensor, crc8/footer
 
 #define ID_PIN 22    //if pin high, manifold 1. if low, manifold 2    //default is high
 #define SD_CS 53    //for sd card
@@ -22,11 +21,12 @@ uint8_t DEVICE_ID;
 HardwareSerial& loraSerial = Serial1;   //RX1 (19), TX1 (18)
 
 #define tempSensor_PIN 32    //tempSensor requires only one digital pin
-OneWire oneWire(tempSensor_PIN);    //for communication with tempSensor
-DallasTemperature tempSensor(&oneWire);  //pass ref to DallasTemperature library
+DHT tempSensor(tempSensor_PIN, DHT11);    //type is DHT11
 
 unsigned long lastTelemetrySend = 0;
 unsigned long lastLoggedEvent = 0;
+unsigned long lastGetTemp = 0;
+float tempC = 20;   //initial temp value
 
 // ---------------- PRESSURE CALIBRATION ----------------
 const int V1_mV = 500;
@@ -130,6 +130,10 @@ void initializeDatalogging() {
 void deviceConfig() {   //determines device ID, i.e. which manifold
   pinMode(ID_PIN, INPUT_PULLUP);
   DEVICE_ID =  (digitalRead(ID_PIN) == 1) ? 1 : 2;    //if pin high, manifold 1, if low, manifold 2
+}
+
+void initializeTempSensor() {
+  tempSensor.begin();
 }
 
 
@@ -239,11 +243,11 @@ void readPressure() {   // reads through the array of pressures sensors
 }
 
 uint8_t getTemp() {
-  // Send the command to perform a temperature conversion:
-  tempSensor.requestTemperatures();
+  if (millis() - lastGetTemp > 1000) {   //if long enough wait, get new temp, otherwise use old value
+    tempC = tempSensor.readTemperature();
+    lastGetTemp = millis();
+  }
 
-  // Fetch the temperature in degrees Celsius for device index:
-  float tempC = tempSensor.getTempCByIndex(0); // the index 0 refers to the first device}
   return (uint8_t) (tempC + 100);
   //returns tempC + 100  to allow for values -100 to 155 to be transmitted
   //otherwise, all values below 0 will be wrong.
@@ -411,7 +415,7 @@ void setup() {
     servos[i].begin();        // initializes PWM pins and sets each encoder to 0
 
   initializeDatalogging();    // initializes SD Card
-  tempSensor.begin();         // initialize tempSensor
+  initializeTempSensor();
   logEvent("System ready. Device ID: " + String(DEVICE_ID));
   logEvent("(Time)Header,Version,Dest,Source,Command,Servo-0,Servo-0,Servo-1,Servo-1,Servo-2,Servo-2,Pres-0,Pres-0,Pres-1,Pres-1,Pres-2,Pres-3,Temp,CRC-8,Footer");
 }
