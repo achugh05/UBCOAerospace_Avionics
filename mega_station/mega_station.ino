@@ -26,7 +26,7 @@ DHT tempSensor(tempSensor_PIN, DHT11);    //type is DHT11
 unsigned long lastTelemetrySend = 0;
 unsigned long lastLoggedEvent = 0;
 unsigned long lastGetTemp = 0;
-float tempC = 20;   //initial temp value
+float tempC;   //initial temp value
 
 // ---------------- PRESSURE CALIBRATION ----------------
 const int V1_mV = 500;
