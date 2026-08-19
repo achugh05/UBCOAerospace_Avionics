@@ -677,7 +677,7 @@ ax.set_ylabel(
 # ============================================================
 
 ax.set_title(
-    "Manifold Temperature",
+    "Vent Temperature",
 
     color=PINK,
 
